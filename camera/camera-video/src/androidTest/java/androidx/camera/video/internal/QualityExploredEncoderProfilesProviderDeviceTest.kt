@@ -1,0 +1,220 @@
+/*
+ * Copyright 2023 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package androidx.camera.video.internal
+
+import android.content.Context
+import android.media.CamcorderProfile
+import android.media.EncoderProfiles.VideoProfile.HDR_HLG
+import android.media.MediaFormat.MIMETYPE_VIDEO_HEVC
+import android.os.Build
+import androidx.camera.camera2.Camera2Config
+import androidx.camera.camera2.adapter.EncoderProfilesProviderAdapter
+import androidx.camera.core.CameraXConfig
+import androidx.camera.core.DynamicRange.HLG_10_BIT
+import androidx.camera.core.DynamicRange.SDR
+import androidx.camera.core.impl.CameraInfoInternal
+import androidx.camera.core.impl.EncoderProfilesProvider
+import androidx.camera.core.impl.EncoderProfilesProxy.VideoProfileProxy.BIT_DEPTH_10
+import androidx.camera.core.impl.ImageFormatConstants.INTERNAL_DEFINED_IMAGE_FORMAT_PRIVATE
+import androidx.camera.testing.impl.AndroidUtil.isEmulator
+import androidx.camera.testing.impl.CameraUtil
+import androidx.camera.testing.impl.CameraXUtil
+import androidx.camera.testing.impl.LabTestRule
+import androidx.camera.video.Quality
+import androidx.camera.video.internal.compat.quirk.DeviceQuirks
+import androidx.camera.video.internal.compat.quirk.MediaCodecInfoReportIncorrectInfoQuirk
+import androidx.camera.video.internal.encoder.DefaultVideoEncoderFactory
+import androidx.camera.video.internal.utils.EncoderProfilesUtil.validateOrAdapt
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.filters.SdkSuppress
+import androidx.test.filters.SmallTest
+import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
+import java.util.concurrent.TimeUnit
+import org.junit.After
+import org.junit.Assume.assumeFalse
+import org.junit.Assume.assumeNotNull
+import org.junit.Assume.assumeTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.junit.runners.Parameterized
+
+@SmallTest
+@RunWith(Parameterized::class)
+class QualityExploredEncoderProfilesProviderDeviceTest(
+    private val implName: String,
+    private val cameraConfig: CameraXConfig,
+    private val quality: Int,
+) {
+
+    @get:Rule
+    val cameraRule =
+        CameraUtil.grantCameraPermissionAndPreTestAndPostTest(
+            CameraUtil.PreTestCameraIdList(cameraConfig)
+        )
+
+    @get:Rule val labTest: LabTestRule = LabTestRule()
+
+    companion object {
+
+        // Reference to the available values listed in Quality.
+        @JvmStatic
+        private val qualities =
+            arrayOf(
+                CamcorderProfile.QUALITY_480P,
+                CamcorderProfile.QUALITY_720P,
+                CamcorderProfile.QUALITY_1080P,
+                CamcorderProfile.QUALITY_2160P,
+            )
+
+        @JvmStatic private val cameraXConfigs = listOf(Camera2Config::class.simpleName)
+
+        @JvmStatic
+        @Parameterized.Parameters(name = "config={0}, quality={2}")
+        fun data() =
+            mutableListOf<Array<Any?>>().apply {
+                cameraXConfigs.forEach { configImplName ->
+                    qualities.forEach { quality ->
+                        add(
+                            arrayOf(
+                                configImplName,
+                                when (configImplName) {
+                                    Camera2Config::class.simpleName -> Camera2Config.defaultConfig()
+                                    else -> Camera2Config.defaultConfig()
+                                },
+                                quality,
+                            )
+                        )
+                    }
+                }
+            }
+
+        private fun hasMediaCodecIncorrectInfoQuirk(): Boolean {
+            return DeviceQuirks.get(MediaCodecInfoReportIncorrectInfoQuirk::class.java) != null
+        }
+    }
+
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    private lateinit var cameraId: String
+    private lateinit var cameraInfo: CameraInfoInternal
+    private lateinit var baseProvider: EncoderProfilesProvider
+
+    @Before
+    fun setup() {
+        val cameraSelector = CameraUtil.assumeFirstAvailableCameraSelector()
+
+        // Skip for b/264902324
+        assumeFalse(
+            "Emulator API 30 crashes running this test.",
+            Build.VERSION.SDK_INT == 30 && isEmulator(),
+        )
+
+        CameraXUtil.initialize(context, cameraConfig).get()
+
+        cameraId = CameraUtil.getCameraIdWithLensFacing(cameraSelector.lensFacing!!)!!
+        cameraInfo =
+            CameraUtil.createCameraUseCaseAdapter(context, cameraSelector).cameraInfo
+                as CameraInfoInternal
+        baseProvider = EncoderProfilesProviderAdapter(cameraId, cameraInfo.cameraQuirks)
+    }
+
+    @After
+    fun tearDown() {
+        CameraXUtil.shutdown().get(10, TimeUnit.SECONDS)
+    }
+
+    @LabTestRule.LabTestOnly
+    @Test
+    fun validateOrAdaptWithDefaultEncoderInfoFinder_returnNonNull_whenProfileIsFromCamcorder() {
+        // Arrange.
+        assumeFalse(hasMediaCodecIncorrectInfoQuirk())
+        assumeTrue(baseProvider.hasProfile(quality))
+        val encoderProfiles = baseProvider.getAll(quality)
+        val baseVideoProfile = encoderProfiles!!.videoProfiles[0]
+        // Due to a known issue where VideoProfile might be null, see InvalidVideoProfilesQuirk,
+        // skip the test if VideoProfile is null.
+        assumeNotNull(baseVideoProfile)
+
+        // Act.
+        val resultVideoProfile =
+            validateOrAdapt(baseVideoProfile, DefaultVideoEncoderFactory.DEFAULT_FINDER)
+
+        // Verify.
+        assertWithMessage("Video profile validation failed.").that(resultVideoProfile).isNotNull()
+    }
+
+    @LabTestRule.LabTestOnly
+    @SdkSuppress(minSdkVersion = 33)
+    @Test
+    fun providerWithDefaultEncoderInfoFinder_provideHlg10Profile_whenBaseSdrProfileIsValid() {
+        // Pre-arrange.
+        assumeTrue(cameraInfo.supportedDynamicRanges.containsAll(setOf(SDR, HLG_10_BIT)))
+        // HLG10 profiles require a hardware-accelerated HEVC encoder (b/567407353).
+        assumeTrue(isHevcEncoderHardwareAccelerated())
+
+        // Arrange.
+        assumeFalse(hasMediaCodecIncorrectInfoQuirk())
+        assumeTrue(baseProvider.hasProfile(quality))
+
+        // Act.
+        val provider = createQualityExploredProvider()
+        assertThat(provider.hasProfile(quality)).isTrue()
+        val videoProfiles = provider.getAll(quality)!!.videoProfiles
+
+        // Verify.
+        assertThat(videoProfiles.any { it.hdrFormat == HDR_HLG && it.bitDepth == BIT_DEPTH_10 })
+            .isTrue()
+    }
+
+    // Regression test for b/567407353: feeding camera surfaces into a software HEVC encoder for
+    // 10-bit HDR crashes mediaswcodec or drops frames, so no backup HLG10 profile may be added.
+    @LabTestRule.LabTestOnly
+    @SdkSuppress(minSdkVersion = 33)
+    @Test
+    fun providerWithDefaultEncoderInfoFinder_noHlg10Profile_whenHevcEncoderIsSoftware() {
+        // Pre-arrange.
+        assumeTrue(cameraInfo.supportedDynamicRanges.containsAll(setOf(SDR, HLG_10_BIT)))
+        assumeFalse(isHevcEncoderHardwareAccelerated())
+
+        // Arrange.
+        assumeTrue(baseProvider.hasProfile(quality))
+        val baseVideoProfiles = requireNotNull(baseProvider.getAll(quality)).videoProfiles
+
+        // Act.
+        val videoProfiles =
+            requireNotNull(createQualityExploredProvider().getAll(quality)).videoProfiles
+
+        // Verify.
+        assertThat(videoProfiles).containsExactlyElementsIn(baseVideoProfiles)
+    }
+
+    private fun createQualityExploredProvider(): QualityExploredEncoderProfilesProvider =
+        QualityExploredEncoderProfilesProvider(
+            baseProvider,
+            Quality.getSortedQualities(),
+            setOf(HLG_10_BIT),
+            cameraInfo.getSupportedResolutions(INTERNAL_DEFINED_IMAGE_FORMAT_PRIVATE),
+            DefaultVideoEncoderFactory.DEFAULT_FINDER,
+        )
+
+    private fun isHevcEncoderHardwareAccelerated(): Boolean =
+        DefaultVideoEncoderFactory.DEFAULT_FINDER.find(MIMETYPE_VIDEO_HEVC)
+            ?.isHardwareAccelerated == true
+}

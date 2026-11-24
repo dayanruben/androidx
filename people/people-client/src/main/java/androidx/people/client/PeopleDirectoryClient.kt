@@ -18,7 +18,6 @@ package androidx.people.client
 
 import android.app.PendingIntent
 import android.content.Context
-import androidx.annotation.RestrictTo
 import androidx.people.DirectoryInfo
 import androidx.people.GroupQuery
 import androidx.people.GroupQueryResult
@@ -48,11 +47,12 @@ import kotlinx.coroutines.flow.Flow
  * their inputs:
  * ```
  * val result = client.queryPersons(personQuery(pkg) { addPhones(numbers) })
- * val byNumber = numbers.associateWith { n -> result.matchesFor(pkg, Criterion.Phone(n)) }
+ * val byNumber = numbers.associateWith { n -> result.getResultFor(pkg, Criterion.Phone(n)) }
  * ```
  *
- * Every queried criterion ends up in exactly one of [PersonQueryResult.matchedQuery],
- * [PersonQueryResult.unmatchedQuery], or [PersonQueryResult.unhandledQuery], so criteria that a
+ * Every queried criterion ends up in either [PersonQueryResult.handledQuery]
+ * ([androidx.people.MatchResult.Handled], with an empty match set when evaluated with no match) or
+ * [PersonQueryResult.unhandledQuery] ([androidx.people.MatchResult.Unhandled]), so criteria that a
  * People Directory application did not evaluate, for example because its data is not cached yet,
  * can be told apart from criteria that matched nothing. When the People Directory is not available
  * on this device, every criterion is in [PersonQueryResult.unhandledQuery].
@@ -63,7 +63,6 @@ import kotlinx.coroutines.flow.Flow
  * This interface is not intended to be implemented outside the library; new members may be added in
  * future releases.
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY)
 @JvmDefaultWithCompatibility
 public interface PeopleDirectoryClient {
 
