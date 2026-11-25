@@ -34,11 +34,20 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 
-/** Collection of threads and scope(s) that have been configured and tuned. */
-public class UseCaseThreads(
+/**
+ * Collection of threads and scope(s) that have been configured and tuned.
+ *
+ * @param schedulerHandler Optional [Handler] used only as a timer for delayed coroutine work (e.g.
+ *   `delay` or `withTimeout`) on [sequentialScope]. When set, timers are tracked on this handler
+ *   and resumed tasks still run on [sequentialExecutor], so no extra timer thread is created.
+ */
+public class UseCaseThreads
+@JvmOverloads
+constructor(
     public val scope: CoroutineScope,
     public val backgroundExecutor: Executor,
     public val backgroundDispatcher: CoroutineDispatcher,
+    schedulerHandler: Handler? = null,
 ) {
     public val mainHandler: Handler = Handler(Looper.getMainLooper())
     private val sequentialExecutorDelegate =
@@ -58,11 +67,8 @@ public class UseCaseThreads(
      */
     public fun isOnSequentialThread(): Boolean = isSequentialThread.get() == true
 
-    /**
-     * Executor that enforces sequential execution and sets the [isSequentialThread] flag during
-     * task execution.
-     */
-    public val sequentialExecutor: Executor = Executor { command ->
+    /** Runs tasks sequentially and sets the [isSequentialThread] flag during task execution. */
+    private val confinedSequentialExecutor = Executor { command ->
         sequentialExecutorDelegate.execute {
             isSequentialThread.set(true)
             try {
@@ -72,7 +78,25 @@ public class UseCaseThreads(
             }
         }
     }
-    private val sequentialDispatcher = sequentialExecutor.asCoroutineDispatcher()
+
+    /**
+     * Executor that enforces sequential execution and sets the [isSequentialThread] flag during
+     * task execution.
+     *
+     * If a scheduler [Handler] is provided, this is also a
+     * [java.util.concurrent.ScheduledExecutorService] whose delayed tasks still run sequentially
+     * with the flag set.
+     */
+    public val sequentialExecutor: Executor =
+        if (schedulerHandler != null) {
+            CameraXExecutors.asScheduledExecutor(confinedSequentialExecutor, schedulerHandler)
+        } else {
+            confinedSequentialExecutor
+        }
+
+    internal val sequentialDispatcher: CoroutineDispatcher =
+        sequentialExecutor.asCoroutineDispatcher()
+
     public var sequentialScope: CoroutineScope =
         CoroutineScope(scope.coroutineContext + SupervisorJob() + sequentialDispatcher)
         @VisibleForTesting set
@@ -120,10 +144,12 @@ public class UseCaseThreads(
      * mapping.
      *
      * Cancelling a `Deferred` returned from this function does not cancel the corresponding
-     * `Deferred` returned by `block`.
+     * `Deferred` returned by `block`. If the launched sequential coroutine completes abnormally,
+     * all uncompleted `Deferred` elements in the returned list are completed with that
+     * failure/cancellation.
      *
      * @param size Size of the list returned from [block], the list returned via this function will
-     *   also have th same size.
+     *   also have the same size.
      * @return A list of [Deferred] where each element is completed as per the corresponding
      *   [Deferred] in the list returned from [block].
      */
@@ -132,8 +158,15 @@ public class UseCaseThreads(
         crossinline block: () -> List<Deferred<T>>,
     ): List<Deferred<T>> {
         val deferredList = List(size) { CompletableDeferred<T>() }
-        sequentialScope.launch {
-            block().forEachIndexed { index, deferred -> deferred.propagateTo(deferredList[index]) }
+        val job = sequentialScope.launch {
+            block().forEachIndexed { index, deferred ->
+                deferred.propagateTo(deferredList[index])
+            }
+        }
+        job.invokeOnCompletion { throwable ->
+            if (throwable != null) {
+                deferredList.forEach { it.completeFailing(throwable) }
+            }
         }
         return deferredList
     }
@@ -213,7 +246,9 @@ public class UseCaseThreads(
      * [Deferred] list with one-to-one mapping.
      *
      * Cancelling a [Deferred] returned from this function does not cancel the corresponding
-     * [Deferred] returned by [block].
+     * [Deferred] returned by [block]. If the launched sequential coroutine completes abnormally,
+     * all uncompleted [Deferred] elements in the returned list are completed with that
+     * failure/cancellation.
      *
      * @param size Size of the list returned from [block], the list returned via this function will
      *   also have the same size.
@@ -229,8 +264,16 @@ public class UseCaseThreads(
         crossinline block: suspend () -> List<Deferred<T>>,
     ): List<Deferred<T>> {
         val deferredList = List(size) { CompletableDeferred<T>() }
-        sequentialScope.launch(start = start) {
-            block().forEachIndexed { index, deferred -> deferred.propagateTo(deferredList[index]) }
+        val job =
+            sequentialScope.launch(start = start) {
+                block().forEachIndexed { index, deferred ->
+                    deferred.propagateTo(deferredList[index])
+                }
+            }
+        job.invokeOnCompletion { throwable ->
+            if (throwable != null) {
+                deferredList.forEach { it.completeFailing(throwable) }
+            }
         }
         return deferredList
     }

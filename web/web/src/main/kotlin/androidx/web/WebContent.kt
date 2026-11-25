@@ -74,11 +74,14 @@ internal constructor(
     /**
      * Transfers this [WebContent] to a new [WebContentView], like [attach] but first removing the
      * attached view from the view hierarchy, so the new view can take over in the same frame.
+     *
+     * Does nothing and returns `null` if this [WebContent] is closed.
      */
     @InternalWebApi
     @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
     @UiThread
-    public fun <T : WebContentView> transfer(context: Context, factory: Function<Context, T>): T {
+    public fun <T : WebContentView> transfer(context: Context, factory: Function<Context, T>): T? {
+        if (isDestroyed) return null
         checkCanAttach(context)
         val previousView = if (isAttached()) currentView else null
         if (previousView != null) {
@@ -137,8 +140,8 @@ internal constructor(
      *
      * @param context The context to use to construct the View.
      * @param factory A function that creates a new [WebContentView].
-     * @return A wrapped factory that automatically attaches this [WebContent] state.
-     * @throws IllegalArgumentException if [context] is not an [Activity] context.
+     * @return The [WebContentView] created by `factory` and attached to this [WebContent].
+     * @throws IllegalArgumentException if `context` is not an [Activity] context.
      * @throws IllegalStateException if a previously bound [WebContentView] is still in the view
      *   hierarchy, if the returned view uses a different context, or if this [WebContent] is
      *   closed.
@@ -178,6 +181,7 @@ internal constructor(
             boundaryInterface.destroy()
         } finally {
             isDestroyed = true
+            cleanUpContext(currentContext)
             currentView = null
             currentContext = null
         }

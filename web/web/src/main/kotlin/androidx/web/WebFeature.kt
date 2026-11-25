@@ -32,7 +32,7 @@ public object WebFeature {
     public const val WEB_CONTENT: String = "WEB_CONTENT"
 
     /** Feature for WebSurface. */
-    public const val WEB_SURFACE: String = Features.WEB_SURFACE
+    public const val WEB_SURFACE: String = "WEB_SURFACE"
 
     private val supportedFeatures: Set<String> by lazy {
         try {
@@ -47,17 +47,20 @@ public object WebFeature {
     }
 
     /**
-     * Return whether a feature is supported at runtime. On devices where this is not supported, an
-     * [UnsupportedOperationException] will be thrown.
+     * Returns whether `feature` is supported at runtime.
      *
-     * @param feature the feature to be checked
-     * @return true if the feature is supported
+     * APIs annotated with [androidx.annotation.RequiresFeature] throw
+     * [UnsupportedOperationException] on devices where this returns `false`.
+     *
+     * @param feature the feature to check, either [WEB_CONTENT] or [WEB_SURFACE]
+     * @return `true` if `feature` is supported by the current WebView, `false` otherwise
      */
     @JvmStatic
     public fun isFeatureSupported(@WebFeatures feature: String): Boolean {
         val internalFeature =
             when (feature) {
                 WEB_CONTENT -> Features.WEB_CONTENT_V2
+                WEB_SURFACE -> Features.WEB_SURFACE
                 else -> feature
             }
         return Features.containsFeature(supportedFeatures, internalFeature)

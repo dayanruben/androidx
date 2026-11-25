@@ -61,19 +61,14 @@ import androidx.compose.remote.creation.compose.state.RemoteImageBitmap
 import androidx.compose.remote.creation.compose.state.RemotePaint
 import androidx.compose.remote.creation.compose.state.RemotePaintingStyle
 import androidx.compose.remote.creation.compose.state.rb
-import androidx.compose.remote.creation.compose.state.rc
 import androidx.compose.remote.creation.compose.state.rdp
 import androidx.compose.remote.creation.compose.state.rf
-import androidx.compose.remote.creation.compose.state.toConstantColorOrNull
 import androidx.compose.remote.creation.compose.text.RemoteTextAlign
 import androidx.compose.remote.creation.compose.text.RemoteTextOverflow
 import androidx.compose.remote.creation.compose.text.RemoteTextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
-import androidx.compose.ui.graphics.Color
-import androidx.wear.compose.material3.ButtonDefaults.scrimGradientEndColor
-import androidx.wear.compose.material3.ButtonDefaults.scrimGradientStartColor
 import androidx.wear.compose.remote.material3.RemoteButtonDefaults.buttonColors
 import androidx.wear.compose.remote.material3.RemoteButtonDefaults.defaultButtonWithContainerPainterColors
 
@@ -655,8 +650,10 @@ public object RemoteButtonDefaults {
             iconColor = iconColor ?: default.iconColor,
             disabledContainerColor =
                 disabledContainerColor
-                    ?: if (containerColor?.toConstantColorOrNull() == Color.Transparent) {
-                        Color.Transparent.rc
+                    ?: if (
+                        containerColor?.constantValueOrNull == RemoteColor.Transparent.constantValue
+                    ) {
+                        RemoteColor.Transparent
                     } else {
                         default.disabledContainerColor
                     },
@@ -1055,11 +1052,11 @@ public object RemoteButtonDefaults {
         @RemoteComposable
         get() {
             return RemoteButtonColors(
-                containerColor = Color.Transparent.rc,
+                containerColor = RemoteColor.Transparent,
                 contentColor = onBackground,
                 secondaryContentColor = onBackground.copy(alpha = 0.8f.rf),
                 iconColor = onBackground,
-                disabledContainerColor = Color.Transparent.rc,
+                disabledContainerColor = RemoteColor.Transparent,
                 disabledContentColor = onSurface.toDisabledColor(disabledAlpha = 0.38f.rf),
                 disabledSecondaryContentColor = onSurface.toDisabledColor(disabledAlpha = 0.38f.rf),
                 disabledIconColor = onSurface.toDisabledColor(disabledAlpha = 0.38f.rf),
@@ -1103,11 +1100,11 @@ public object RemoteButtonDefaults {
         @RemoteComposable
         get() {
             return RemoteButtonColors(
-                containerColor = Color.Transparent.rc,
+                containerColor = RemoteColor.Transparent,
                 contentColor = onSurface,
                 secondaryContentColor = onSurfaceVariant,
                 iconColor = primary,
-                disabledContainerColor = Color.Transparent.rc,
+                disabledContainerColor = RemoteColor.Transparent,
                 disabledContentColor = onSurface.toDisabledColor(disabledAlpha = 0.38f.rf),
                 disabledSecondaryContentColor = onSurface.toDisabledColor(disabledAlpha = 0.38f.rf),
                 disabledIconColor = onSurface.toDisabledColor(disabledAlpha = 0.38f.rf),
@@ -1119,11 +1116,11 @@ public object RemoteButtonDefaults {
         @RemoteComposable
         get() {
             return RemoteButtonColors(
-                containerColor = Color.Transparent.rc,
+                containerColor = RemoteColor.Transparent,
                 contentColor = onSurface,
                 secondaryContentColor = onSurfaceVariant,
                 iconColor = primary,
-                disabledContainerColor = Color.Transparent.rc,
+                disabledContainerColor = RemoteColor.Transparent,
                 disabledContentColor = onSurface.toDisabledColor(disabledAlpha = 0.38f.rf),
                 disabledSecondaryContentColor = onSurface.toDisabledColor(disabledAlpha = 0.38f.rf),
                 disabledIconColor = onSurface.toDisabledColor(disabledAlpha = 0.38f.rf),
@@ -1190,11 +1187,7 @@ public object RemoteButtonDefaults {
      */
     @Composable
     @RemoteComposable
-    public fun scrimBrush(): RemoteBrush {
-        val startColor = scrimGradientStartColor.rc
-        val endColor = scrimGradientEndColor.rc
-        return RemoteBrush.linearGradient(colors = listOf(startColor, endColor))
-    }
+    public fun scrimBrush(): RemoteBrush = RemoteBrush.linearGradient(colors = scrimColors())
 
     /**
      * Creates a [RemoteBrush] for the recommended scrim drawn on top of image container
@@ -1206,14 +1199,18 @@ public object RemoteButtonDefaults {
      */
     @Composable
     @RemoteComposable
-    public fun scrimBrush(size: RemoteSize): RemoteBrush {
-        val startColor = scrimGradientStartColor.rc
-        val endColor = scrimGradientEndColor.rc
-        return RemoteBrush.linearGradient(
-            colors = listOf(startColor, endColor),
+    public fun scrimBrush(size: RemoteSize): RemoteBrush =
+        RemoteBrush.linearGradient(
+            colors = scrimColors(),
             RemoteOffset.Zero,
             RemoteOffset(size.width, size.height),
         )
+
+    @Composable
+    @RemoteComposable
+    private fun scrimColors(): List<RemoteColor> {
+        val surfaceContainer = RemoteMaterialTheme.colorScheme.surfaceContainer
+        return listOf(surfaceContainer.copy(alpha = 1f.rf), surfaceContainer.copy(alpha = 0f.rf))
     }
 }
 
