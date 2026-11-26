@@ -1076,6 +1076,208 @@ class RemoteIntTest {
     }
 
     @Test
+    fun peepholeOptimization_additiveCancellation_constantMinusVar() {
+        val yTop = createNamedRemoteInt("yTop", 12)
+
+        val expr1 = yTop + (44.ri - yTop)
+        assertThat(expr1.constantValueOrNull).isEqualTo(44)
+        creationState.getId(expr1)
+        assertThat(getOperationsStrings()).containsExactly("IntegerExpression[43] = (44)").inOrder()
+
+        assertThat(((44.ri - yTop) + yTop).constantValueOrNull).isEqualTo(44)
+        assertThat(((yTop + 8.ri) + (44.ri - yTop)).constantValueOrNull).isEqualTo(52)
+        assertThat((yTop + ((44.ri - yTop) - 8.ri)).constantValueOrNull).isEqualTo(36)
+    }
+
+    @Test
+    fun peepholeOptimization_additiveCancellation_varMinusVar() {
+        val yTop = createNamedRemoteInt("yTop", 12)
+        val yBottom = createNamedRemoteInt("yBottom", 44)
+        val padding = createNamedRemoteInt("padding", 6)
+
+        val cancelled = yTop + (yBottom - yTop)
+        assertThat(cancelled).isEqualTo(yBottom)
+        creationState.getId(cancelled)
+        assertThat(getOperationsStrings())
+            .containsExactly(
+                "VariableName[43] = \"USER:yBottom\" type=4",
+                "IntegerConstant[43] = 44",
+            )
+            .inOrder()
+
+        assertThat((yBottom - yTop) + yTop).isEqualTo(yBottom)
+        assertThat((yTop + 4.ri) + (yBottom - 4.ri)).isEqualTo(yTop + yBottom)
+        assertThat((yTop + padding) + (yBottom - padding)).isEqualTo(yTop + yBottom)
+        assertThat((yTop - yBottom) + (yBottom - padding)).isEqualTo(yTop - padding)
+        assertThat((yTop + yBottom) - yTop).isEqualTo(yBottom)
+        assertThat((yTop + yBottom) - yBottom).isEqualTo(yTop)
+        assertThat(yTop - (yTop - yBottom)).isEqualTo(yBottom)
+        assertThat(yTop - (yTop + yBottom)).isEqualTo(-yBottom)
+        assertThat((yTop - padding) + (yBottom - yTop)).isEqualTo(yBottom - padding)
+        assertThat((yTop - yTop).constantValueOrNull).isEqualTo(0)
+        assertThat((yTop + (-yTop)).constantValueOrNull).isEqualTo(0)
+        assertThat(((-yTop) + yTop).constantValueOrNull).isEqualTo(0)
+        assertThat((yTop + yTop) - yTop).isEqualTo(yTop)
+
+        val combined = (yTop - padding) + (yBottom - yTop)
+        val combinedId = creationState.getId(combined)
+        makeAndUpdateCoreDocument {
+            context.setNamedIntegerOverride("USER:yTop", 5)
+            context.setNamedIntegerOverride("USER:yBottom", 50)
+            context.setNamedIntegerOverride("USER:padding", 8)
+        }
+        assertThat(context.getInteger(combinedId)).isEqualTo(42)
+    }
+
+    @Test
+    fun peepholeOptimization_doubleNegation() {
+        val x = createNamedRemoteInt("x", 10)
+        assertThat(-(-x)).isEqualTo(x)
+        assertThat(44.ri - (-x)).isEqualTo(x + 44)
+    }
+
+    @Test
+    fun peepholeOptimization_additiveCancellation_overflowWraparound() {
+        val x = createNamedRemoteInt("x", 5)
+
+        assertThat((x + (Int.MIN_VALUE.ri - x)).constantValueOrNull).isEqualTo(Int.MIN_VALUE)
+        assertThat((x - Int.MIN_VALUE) - Int.MIN_VALUE).isEqualTo(x)
+
+        // 2_000_000_000 + 2_000_000_000 wraps in 32-bit int to -294_967_296 -> x - 294_967_296
+        val wrapped = (x + 2_000_000_000) + 2_000_000_000
+        val wrappedId = creationState.getId(wrapped)
+        assertThat(getOperationsStrings())
+            .containsExactly(
+                "VariableName[43] = \"USER:x\" type=4",
+                "IntegerConstant[43] = 5",
+                "IntegerExpression[44] = ([43] 294967296 -)",
+            )
+            .inOrder()
+        makeAndPaintCoreDocument()
+        assertThat(context.getInteger(wrappedId)).isEqualTo(5 + 2_000_000_000 + 2_000_000_000)
+    }
+
+    @Test
+    fun peepholeOptimization_additiveCancellation_mutableRemoteInt() {
+        val m1 = MutableRemoteInt(10)
+        val m2 = MutableRemoteInt(10)
+
+        assertThat((m1 + (44.ri - m1)).constantValueOrNull).isEqualTo(44)
+        assertThat((m1 - m1).constantValueOrNull).isEqualTo(0)
+
+        val diff = m1 - m2
+        assertThat(diff.constantValueOrNull).isNull()
+        val diffId = creationState.getId(diff)
+        makeAndPaintCoreDocument()
+        assertThat(context.getInteger(diffId)).isEqualTo(0)
+    }
+
+    @Test
+    fun peepholeOptimization_additiveCancellation_nonDeterministicRandToInt_doesNotCancel() {
+        val r1 = (rand() * 100f).toRemoteInt()
+        val r2 = (rand() * 100f).toRemoteInt()
+
+        assertThat((r1 - r2).constantValueOrNull).isNull()
+        assertThat((r1 + (10.ri - r2)).constantValueOrNull).isNull()
+        assertThat((r1 xor r2).constantValueOrNull).isNull()
+        assertThat(min(r1, r2)).isNotEqualTo(r1)
+    }
+
+    @Test
+    fun peepholeOptimization_select_unaryAndBinary() {
+        val myBool = RemoteBoolean.createNamedRemoteBoolean("myBool", true)
+        val sel = myBool.select(10.ri, 20.ri)
+
+        val negSel = -sel
+        creationState.getId(negSel)
+        assertThat(getOperationsStrings())
+            .containsExactly(
+                "VariableName[43] = \"USER:myBool\" type=4",
+                "IntegerConstant[43] = 1",
+                "IntegerExpression[44] = (-20 -10 [43] ifElse)",
+            )
+            .inOrder()
+
+        assertThat(myBool.select((-10).ri, 10.ri).absoluteValue.constantValueOrNull).isEqualTo(10)
+        assertThat((sel + (44.ri - sel)).constantValueOrNull).isEqualTo(44)
+        assertThat((sel + 5) - 5).isEqualTo(sel)
+        assertThat(-(-sel)).isEqualTo(sel)
+
+        val combinedSelect = myBool.select(4.ri, 8.ri) + myBool.select(2.ri, 6.ri)
+        assertThat(combinedSelect).isInstanceOf(RemoteIntSelect::class.java)
+        assertThat((combinedSelect as RemoteIntSelect).ifTrue.constantValueOrNull).isEqualTo(6)
+        assertThat(combinedSelect.ifFalse.constantValueOrNull).isEqualTo(14)
+
+        val constantSelect = myBool.select(4.ri, 8.ri) + myBool.select(6.ri, 2.ri)
+        assertThat(constantSelect.constantValueOrNull).isEqualTo(10)
+
+        val x = createNamedRemoteInt("x", 1)
+        val y = createNamedRemoteInt("y", 3)
+        val collapsedWithExtraVar =
+            (x + myBool.select(4.ri, 8.ri)) + (myBool.select(6.ri, 2.ri) - x) + y
+        assertThat(collapsedWithExtraVar).isEqualTo(y + 10)
+    }
+
+    @Test
+    fun peepholeOptimization_idempotentAndSelfCancellingBitwiseAndMinMax() {
+        val x = createNamedRemoteInt("x", 10)
+        assertThat(min(x, x)).isEqualTo(x)
+        assertThat(max(x, x)).isEqualTo(x)
+        assertThat(x and x).isEqualTo(x)
+        assertThat(x or x).isEqualTo(x)
+        assertThat((x xor x).constantValueOrNull).isEqualTo(0)
+    }
+
+    @Test
+    fun peepholeOptimization_zeroDivByZero_doesNotThrow() {
+        assertThat((0.ri / 0).constantValueOrNull).isEqualTo(0)
+        assertThat((0.ri / 0.ri).constantValueOrNull).isEqualTo(0)
+
+        val divZero = 10.ri / 0
+        val modZero = 10.ri % 0
+        val divZeroId = creationState.getId(divZero)
+        val modZeroId = creationState.getId(modZero)
+        makeAndPaintCoreDocument()
+        assertThat(context.getInteger(divZeroId)).isEqualTo(0)
+        assertThat(context.getInteger(modZeroId)).isEqualTo(0)
+    }
+
+    @Test
+    fun peepholeOptimization_divDiv_overflowAndNegOne_doesNotMisFold() {
+        val x99 = createNamedRemoteInt("x99", 99)
+        // 3 * -1_431_655_765 == 1 in wrapping 32-bit Int; must NOT fold to Identity (x99).
+        val modInvExpr = (x99 / 3) / -1_431_655_765
+        val modInvId = creationState.getId(modInvExpr)
+
+        // 65536 * 65536 == 0 in wrapping 32-bit Int; must NOT rewrite to x99 / 0.
+        val wrapZeroExpr = (x99 / 65536) / 65536
+        assertThat(wrapZeroExpr.toString()).isEqualTo("user:x99 / 65536 / 65536")
+        val wrapZeroId = creationState.getId(wrapZeroExpr)
+        val substituted = wrapZeroExpr.transform { state -> if (state == x99) 100.ri else null }
+        assertThat(substituted.constantValueOrNull).isEqualTo(0)
+
+        val xBig = createNamedRemoteInt("xBig", 2_000_000_000)
+        val overflowProdExpr = (xBig / 2_000_000_000) / 3
+        val overflowProdId = creationState.getId(overflowProdExpr)
+
+        val xMin = createNamedRemoteInt("xMin", Int.MIN_VALUE)
+        val wrapMinExpr = (xMin / 65536) / 32768
+        val wrapMinId = creationState.getId(wrapMinExpr)
+
+        val negOneDivTwoExpr = (xMin / -1) / 2
+        val negOneDivTwoId = creationState.getId(negOneDivTwoExpr)
+
+        assertThat((xMin / -1) / -1).isEqualTo(xMin)
+
+        makeAndPaintCoreDocument()
+        assertThat(context.getInteger(modInvId)).isEqualTo(0)
+        assertThat(context.getInteger(wrapZeroId)).isEqualTo(0)
+        assertThat(context.getInteger(overflowProdId)).isEqualTo(0)
+        assertThat(context.getInteger(wrapMinId)).isEqualTo(-1)
+        assertThat(context.getInteger(negOneDivTwoId)).isEqualTo(-1_073_741_824)
+    }
+
+    @Test
     fun mutableRemoteInt_applyExpression() {
         val timeId = creationState.getId(time)
         val mutableTime = MutableRemoteInt.createMutableForId(timeId.toLong())

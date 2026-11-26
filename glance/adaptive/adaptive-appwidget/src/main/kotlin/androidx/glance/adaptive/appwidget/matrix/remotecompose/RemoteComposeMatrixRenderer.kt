@@ -324,7 +324,7 @@ private fun CompactRowHeader(taps: RemoteComposeActions, card: ResolvedMatrixCar
         }
         card.trailing?.let { trailing ->
             RemoteBox(modifier = RemoteModifier.width(MatrixDefaults.HeaderSpacing.asRdp()))
-            trailing.Content(taps, card.trailingSize)
+            trailing.Content(taps, card.trailingSize, card.tiers)
         }
     }
 }
@@ -335,10 +335,10 @@ private fun RowHeader(taps: RemoteComposeActions, card: ResolvedMatrixCard) {
     val rowModifier =
         if (card.headerHorizontalPadding.value > 0f) {
             RemoteModifier.fillMaxWidth()
-                .heightIn(min = MatrixDefaults.HeaderRowMinHeight.asRdp())
+                .heightIn(min = card.headerRowMinHeight.asRdp())
                 .padding(horizontal = card.headerHorizontalPadding.asRdp())
         } else {
-            RemoteModifier.fillMaxWidth().heightIn(min = MatrixDefaults.HeaderRowMinHeight.asRdp())
+            RemoteModifier.fillMaxWidth().heightIn(min = card.headerRowMinHeight.asRdp())
         }
     RemoteRow(
         modifier = rowModifier,
@@ -367,7 +367,7 @@ private fun RowHeader(taps: RemoteComposeActions, card: ResolvedMatrixCard) {
         }
         card.trailing?.let { trailing ->
             RemoteBox(modifier = RemoteModifier.width(MatrixDefaults.HeaderSpacing.asRdp()))
-            trailing.Content(taps, card.trailingSize)
+            trailing.Content(taps, card.trailingSize, card.tiers)
         }
     }
 }
@@ -492,7 +492,11 @@ private fun SecondaryComponent.SecondaryContent(
 
 @RemoteComposable
 @Composable
-private fun TrailingComponent.Content(taps: RemoteComposeActions, size: Dp) {
+private fun TrailingComponent.Content(
+    taps: RemoteComposeActions,
+    size: Dp,
+    tiers: SizeTiers,
+) {
     when (this) {
         is IconButton ->
             if (contained) {
@@ -506,8 +510,8 @@ private fun TrailingComponent.Content(taps: RemoteComposeActions, size: Dp) {
                 Content(
                     taps = taps,
                     diameter = size,
-                    glyphSize = MatrixDefaults.UncontainedTrailingGlyphSize,
-                    width = MatrixDefaults.UncontainedTrailingWidth,
+                    glyphSize = MatrixDefaults.uncontainedTrailingGlyphSize(tiers),
+                    width = MatrixDefaults.uncontainedTrailingWidth(tiers),
                 )
             }
     }

@@ -104,38 +104,45 @@ internal data class TransformingLazyColumnMeasuredItem(
     val minimumBottomContentPadding: Dp? =
         (placeable?.parentData as? TransformingLazyColumnParentData)?.minimumBottomContentPadding
 
+    internal val snapSegmentThresholdProvider: ((Int, Int) -> Int)? =
+        (placeable?.parentData as? TransformingLazyColumnParentData)?.snapSegmentThreshold
+
+    private val measuredWidth: Int = placeable?.width ?: 0
+
     /**
-     * The snap segment threshold that the item requests for its measured size, or null. Computed
-     * when the item is measured, so that a state read by the lambda measures the list again. Not
-     * computed when segment snapping is disabled, as item based snapping does not use it.
+     * The snap segment threshold that the item requests for its measured size, or 0 if none was
+     * specified or a non-positive value was returned. Evaluated lazily on read rather than during
+     * measurement so that snapshot reads inside the lambda do not invalidate measure. Not evaluated
+     * when segment snapping is disabled, as item based snapping does not use it.
      */
     @OptIn(ExperimentalWearFoundationApi::class)
-    val snapSegmentThresholdPx: Int? =
-        if (WearComposeFoundationFlags.isTransformingLazyColumnSnapSegmentsEnabled) {
-            placeable?.let { p ->
-                (p.parentData as? TransformingLazyColumnParentData)
-                    ?.snapSegmentThreshold
-                    ?.invoke(p.width, p.height)
+    override val snapSegmentThreshold: Int
+        get() =
+            if (WearComposeFoundationFlags.isTransformingLazyColumnSnapSegmentsEnabled) {
+                placeable?.let {
+                    snapSegmentThresholdProvider
+                        ?.invoke(measuredWidth, measuredHeight)
+                        ?.coerceAtLeast(0)
+                } ?: 0
+            } else {
+                0
             }
-        } else {
-            null
-        }
+
+    private val heightProvider =
+        (placeable?.parentData as? TransformingLazyColumnParentData)?.heightProvider
 
     private var lastMeasuredTransformedHeight = placeable?.height ?: 0
+
+    internal fun transformedHeight(progress: TransformingLazyColumnItemScrollProgress): Int =
+        placeable?.let { p ->
+            heightProvider?.invoke(p.height, progress)?.coerceAtLeast(0) ?: p.height
+        } ?: 0
 
     /** The height of the item after transformations applied. */
     override val transformedHeight: Int
         get() {
             if (isInMeasure) {
-                lastMeasuredTransformedHeight =
-                    // TODO: Save transformedHeight provider.
-                    placeable?.let { p ->
-                        (p.parentData as? TransformingLazyColumnParentData)?.let {
-                            it.heightProvider
-                                ?.invoke(p.height, measureScrollProgress)
-                                ?.coerceAtLeast(0)
-                        } ?: p.height
-                    } ?: 0
+                lastMeasuredTransformedHeight = transformedHeight(measureScrollProgress)
             }
             return lastMeasuredTransformedHeight
         }
@@ -215,23 +222,27 @@ internal data class TransformingLazyColumnMeasuredItem(
 
                 val currentAnimation = animationProvider()
 
-                // If animating, dynamically update the transformed height based on the
-                // animated scroll progress to prevent visual jumps in reverseLayout.
-                if (currentAnimation != null) {
-                    val parentData = placeable.parentData as? TransformingLazyColumnParentData
-                    lastMeasuredTransformedHeight =
-                        parentData
-                            ?.heightProvider
-                            ?.invoke(placeable.height, scrollProgress)
-                            ?.coerceAtLeast(0) ?: placeable.height
-                }
+                // Compute the animated transformed height locally without mutating
+                // lastMeasuredTransformedHeight, so TransformingLazyColumnVisibleItemInfo
+                // .transformedHeight stays consistent with offset.
+                val animatedTransformedHeight =
+                    if (currentAnimation?.isPlacementAnimationInProgress == true) {
+                        transformedHeight(
+                            currentAnimation.animatedScrollProgress.takeIf { it.isSpecified }
+                                ?: measureScrollProgress
+                        )
+                    } else {
+                        transformedHeight
+                    }
 
                 val animationDelta = currentAnimation?.placementDelta ?: IntOffset.Zero
                 val animatedLogicalY = offset + animationDelta.y
 
                 val finalVisualY =
                     if (reverseLayout) {
-                        containerConstraints.maxHeight - animatedLogicalY - transformedHeight
+                        containerConstraints.maxHeight -
+                            animatedLogicalY -
+                            animatedTransformedHeight
                     } else {
                         animatedLogicalY
                     }
@@ -245,7 +256,7 @@ internal data class TransformingLazyColumnMeasuredItem(
                     currentAnimation.finalOffset = finalOffset
                     currentAnimation.logicalOffset = IntOffset(x = xOffset, y = animatedLogicalY)
                     // Keep the animation's height in sync for the next frame's scroll progress.
-                    currentAnimation.transformedHeight = lastMeasuredTransformedHeight
+                    currentAnimation.transformedHeight = animatedTransformedHeight
                 }
             }
         }

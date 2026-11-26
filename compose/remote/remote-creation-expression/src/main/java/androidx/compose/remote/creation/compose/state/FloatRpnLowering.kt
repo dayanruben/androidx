@@ -38,6 +38,92 @@ import androidx.compose.remote.document.NanEncoding
 
 internal const val MAX_SAFE_FLOAT_ARRAY = 30
 
+/**
+ * Unary [RemoteFloat] AST operation node retaining its typed [operand] for optimization and RPN
+ * lowering.
+ */
+internal class UnaryRemoteFloatOp(
+    val op: RemoteFloatOperationKey,
+    val operand: RemoteFloat,
+    val opCode: Float = op.opCode,
+) : BaseRemoteFloat(RemoteOperationCacheKey.create(op, operand)) {
+    override val constantValueOrNull: Float?
+        get() = null
+
+    override val arrayProvider: (creationState: RemoteComposeCreationState) -> FloatArray =
+        if (op == RemoteFloatOperationKey.UnaryMinus) {
+            { creationState -> lowerFloatNegation(creationState, operand) }
+        } else {
+            { creationState -> combineToFloatArray(creationState, arrayOf(operand), opCode) }
+        }
+}
+
+/**
+ * Lowers unary negation of [operand] to RPN [FloatArray] bytecode.
+ *
+ * Since float RPN lacks a dedicated unary-negate opcode, negation normally emits `[operand, -1f,
+ * MUL]`:
+ * * If [operand] is an unshared [BinaryRemoteFloatOp] multiplying or dividing by a constant `c` (`x
+ *     * c` or `x / c` where [hasBeenWrittenToDoc] is `false`), folds the sign directly into `-c`
+ *       (or returns `x`'s array directly when `-c == 1f`).
+ * * Otherwise, emits `[operand, -1f, AnimatedFloatExpression.MUL]` via [combineToFloatArray].
+ *
+ * @param creationState state resolving variable IDs and cached RPN arrays
+ * @param operand expression to negate
+ * @return RPN [FloatArray] evaluating to `-[operand]`
+ */
+internal fun lowerFloatNegation(
+    creationState: RemoteComposeCreationState,
+    operand: RemoteFloat,
+): FloatArray {
+    if (
+        operand is BinaryRemoteFloatOp &&
+            (operand.op == RemoteFloatOperationKey.Times ||
+                operand.op == RemoteFloatOperationKey.Div) &&
+            !operand.hasBeenWrittenToDoc(creationState)
+    ) {
+        val c = operand.right.constantValueOrNull
+        if (c != null) {
+            val negC = -c
+            return if (negC == 1f) {
+                operand.left.arrayForCreationState(creationState)
+            } else {
+                combineToFloatArray(creationState, arrayOf(operand.left), negC, operand.opCode)
+            }
+        }
+    }
+    return combineToFloatArray(
+        creationState,
+        arrayOf(operand),
+        -1f,
+        AnimatedFloatExpression.MUL,
+    )
+}
+
+/**
+ * Binary [RemoteFloat] AST operation node retaining typed [left] and [right] operands for
+ * optimization and RPN lowering.
+ */
+internal class BinaryRemoteFloatOp(
+    val op: RemoteFloatOperationKey,
+    val left: RemoteFloat,
+    val right: RemoteFloat,
+    val opCode: Float = op.opCode,
+) : BaseRemoteFloat(RemoteOperationCacheKey.create(op, left, right)) {
+    override val constantValueOrNull: Float?
+        get() = null
+
+    override val arrayProvider: (creationState: RemoteComposeCreationState) -> FloatArray =
+        { creationState ->
+            val rConst = right.constantValueOrNull
+            if (rConst != null) {
+                combineToFloatArray(creationState, arrayOf(left), rConst, opCode)
+            } else {
+                combineToFloatArray(creationState, arrayOf(left, right), opCode)
+            }
+        }
+}
+
 /** Comparison operators for evaluating [RemoteFloat] select conditions. */
 internal enum class FloatComparisonOp {
     LT,
@@ -65,6 +151,18 @@ internal sealed class SelectFloatCondition {
     ): FloatArray
 
     /**
+     * Checks whether this condition always selects the same branch within a frame.
+     *
+     * Returns `false` when an operand contains a non-deterministic expression such as [rand] or
+     * [randRange]—for example, `selectIfLt(rand(), 0.5f.rf, ...)` or
+     * `(rand().isLessThan(0.5f.rf)).select(...)`, where merging two selects would collapse two
+     * independent random draws into one.
+     *
+     * @return `true` if all operand cache keys are deterministic
+     */
+    abstract fun isDeterministic(): Boolean
+
+    /**
      * Constructs a canonical [RemoteFloat] selecting between [ifTrue] and [ifFalse] under this
      * condition.
      */
@@ -77,38 +175,66 @@ internal sealed class SelectFloatCondition {
      * @property b right-hand operand
      * @property op comparison operator
      */
-    class FloatComparison(
+    data class FloatComparison(
         val a: RemoteFloat,
         val b: RemoteFloat,
         val op: FloatComparisonOp,
-        private val booleanSource: RemoteBoolean? = null,
     ) : SelectFloatCondition() {
-        fun withBooleanSource(bool: RemoteBoolean): FloatComparison =
-            FloatComparison(a, b, op, bool)
+        override fun isDeterministic(): Boolean =
+            a.cacheKey.isDeterministic() && b.cacheKey.isDeterministic()
 
         override fun createSelect(ifTrue: RemoteFloat, ifFalse: RemoteFloat): RemoteFloat {
             if (ifTrue.cacheKey == ifFalse.cacheKey) {
                 return ifTrue
             }
             val key =
-                if (booleanSource != null) {
-                    RemoteOperationCacheKey.create(
-                        BooleanOperationKey.SelectFloat,
-                        booleanSource,
-                        ifTrue,
-                        ifFalse,
-                    )
-                } else {
-                    val selectOp =
-                        when (op) {
-                            FloatComparisonOp.LT -> RemoteFloatOperationKey.SelectIfLT
-                            FloatComparisonOp.LE -> RemoteFloatOperationKey.SelectIfLE
-                            FloatComparisonOp.GT -> RemoteFloatOperationKey.SelectIfGT
-                            FloatComparisonOp.GE -> RemoteFloatOperationKey.SelectIfGE
-                            FloatComparisonOp.EQ -> return a.isEqualTo(b).select(ifTrue, ifFalse)
-                            FloatComparisonOp.NE -> return a.isNotEqualTo(b).select(ifTrue, ifFalse)
-                        }
-                    RemoteOperationCacheKey.create(selectOp, a, b, ifTrue, ifFalse)
+                when (op) {
+                    FloatComparisonOp.LT ->
+                        RemoteOperationCacheKey.create(
+                            RemoteFloatOperationKey.SelectIfLT,
+                            a,
+                            b,
+                            ifTrue,
+                            ifFalse,
+                        )
+                    FloatComparisonOp.LE ->
+                        RemoteOperationCacheKey.create(
+                            RemoteFloatOperationKey.SelectIfLE,
+                            a,
+                            b,
+                            ifTrue,
+                            ifFalse,
+                        )
+                    FloatComparisonOp.GT ->
+                        RemoteOperationCacheKey.create(
+                            RemoteFloatOperationKey.SelectIfGT,
+                            a,
+                            b,
+                            ifTrue,
+                            ifFalse,
+                        )
+                    FloatComparisonOp.GE ->
+                        RemoteOperationCacheKey.create(
+                            RemoteFloatOperationKey.SelectIfGE,
+                            a,
+                            b,
+                            ifTrue,
+                            ifFalse,
+                        )
+                    FloatComparisonOp.EQ ->
+                        RemoteOperationCacheKey.create(
+                            BooleanOperationKey.SelectFloat,
+                            a.isEqualTo(b),
+                            ifTrue,
+                            ifFalse,
+                        )
+                    FloatComparisonOp.NE ->
+                        RemoteOperationCacheKey.create(
+                            BooleanOperationKey.SelectFloat,
+                            a.isNotEqualTo(b),
+                            ifTrue,
+                            ifFalse,
+                        )
                 }
             return RemoteFloatSelect(
                 condition = this,
@@ -169,17 +295,6 @@ internal sealed class SelectFloatCondition {
                         AnimatedFloatExpression.IFELSE,
                     )
             }
-
-        override fun equals(other: Any?): Boolean =
-            this === other ||
-                (other is FloatComparison && a == other.a && b == other.b && op == other.op)
-
-        override fun hashCode(): Int {
-            var result = a.hashCode()
-            result = 31 * result + b.hashCode()
-            result = 31 * result + op.hashCode()
-            return result
-        }
     }
 
     /**
@@ -188,6 +303,8 @@ internal sealed class SelectFloatCondition {
      * @property bool boolean expression driving the branch selection
      */
     data class BooleanCondition(val bool: RemoteBoolean) : SelectFloatCondition() {
+        override fun isDeterministic(): Boolean = bool.cacheKey.isDeterministic()
+
         override fun createSelect(ifTrue: RemoteFloat, ifFalse: RemoteFloat): RemoteFloat {
             if (ifTrue.cacheKey == ifFalse.cacheKey) {
                 return ifTrue
@@ -244,6 +361,11 @@ internal class RemoteFloatSelect(
 
     val hasConstantBranches: Boolean
         get() = ifTrue.constantValueOrNull != null && ifFalse.constantValueOrNull != null
+
+    val hasNonFiniteConstantBranch: Boolean
+        get() =
+            ifTrue.constantValueOrNull?.isFinite() == false ||
+                ifFalse.constantValueOrNull?.isFinite() == false
 }
 
 internal fun RemoteFloat.writeFloatToDocument(creationState: RemoteComposeCreationState): Int {

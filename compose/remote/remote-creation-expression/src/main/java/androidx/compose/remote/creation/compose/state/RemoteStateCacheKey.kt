@@ -25,6 +25,7 @@ import androidx.compose.remote.creation.compose.capture.RemoteComposeCreationSta
 import androidx.compose.remote.creation.compose.layout.RemoteComponentToken
 import androidx.compose.runtime.Immutable
 import java.lang.ref.WeakReference
+import kotlin.math.floor as mathFloor
 import kotlin.reflect.KClass
 
 /**
@@ -41,8 +42,59 @@ public interface RemoteStateCacheKey {
     public val args: List<RemoteStateCacheKey>
         get() = emptyList()
 
+    /**
+     * Reports whether this [RemoteStateCacheKey] always produces a whole number when finite.
+     *
+     * Synthesized bottom-up in `O(1)` via [BaseRemoteStateCacheKey.expressionFlags] on
+     * [RemoteOperationCacheKey] and leaf cache keys (constants, typed variable keys, and discrete
+     * integer context IDs), so queries are `O(1)` without traversing the DAG.
+     *
+     * ```kotlin
+     * // True for integer-typed or integer-preserving expression keys:
+     * (floor(x) + 1f.rf).cacheKey.isResultWholeNumber                       // true
+     * n.toRemoteFloat().cacheKey.isResultWholeNumber                        // true
+     * RemoteStateIdKey(RemoteContext.ID_TIME_IN_HR).isResultWholeNumber     // true
+     *
+     * // False when fractional or mutable values are possible:
+     * (floor(x) / 2f.rf).cacheKey.isResultWholeNumber                       // false
+     * RemoteStateIdKey(RemoteContext.ID_CONTINUOUS_SEC).isResultWholeNumber // false
+     * MutableRemoteFloat(3f).cacheKey.isResultWholeNumber                   // false
+     * ```
+     *
+     * - Returns `true` when every finite evaluation has no fractional part.
+     * - Returns `false` for [MutableRemoteFloat], named floats, non-finite constants, and
+     *   expressions that cannot be proven integer-valued statically.
+     * - Note: Operations such as [floor], [ceil], [sign], and arithmetic (`+`, `-`, `*`, `%`,
+     *   [mad], [lerp]) can still yield `NaN` or infinity at runtime; `true` guarantees no
+     *   fractional part whenever the result is finite.
+     */
+    public val isResultWholeNumber: Boolean
+        get() = false
+
     public fun toDebugString(): String
+
+    /**
+     * Checks whether this cache key's expression DAG evaluates deterministically.
+     *
+     * Returns `false` when any node in the DAG may produce a different value on repeated
+     * evaluations within the same frame—for example, expressions calling [rand] or [randRange], or
+     * unkeyed `RemoteFloat { ... }` lambdas.
+     *
+     * @param requireFiniteFloats when `true`, also rejects expressions that contain or may produce
+     *   non-finite [Float] values (`Infinity` or `NaN`, such as `x / 0f` or `ln(x)`)
+     * @return `true` if the expression is deterministic (and finite when requested)
+     */
+    public fun isDeterministic(requireFiniteFloats: Boolean = false): Boolean = true
 }
+
+/** Bit flag indicating every node in the expression DAG is deterministic. */
+internal const val FLAG_DETERMINISTIC: Int = 1
+
+/** Bit flag indicating at least one node in the expression DAG holds a non-finite [Float]. */
+internal const val FLAG_HAS_NON_FINITE_FLOAT: Int = 1 shl 1
+
+/** Bit flag indicating every finite evaluation of this expression has no fractional part. */
+internal const val FLAG_RESULT_WHOLE_NUMBER: Int = 1 shl 2
 
 /**
  * Traverses this [RemoteStateCacheKey] DAG using the provided [visitor].
@@ -118,6 +170,22 @@ public interface RemoteOperation {
     public val precedence: Int
         get() = 100
 
+    /**
+     * Whether evaluating this operation with identical inputs always yields the same result.
+     *
+     * Operations that sample fresh state on every evaluation—such as [RemoteFloatOperationKey.Rand]
+     * and [RemoteFloatOperationKey.RandInRange]—return `false` so `rand() - rand()` is never
+     * simplified to `0f`.
+     */
+    public val isDeterministic: Boolean
+        get() = true
+
+    /**
+     * Checks whether this operation may evaluate to a non-finite [Float] (`Infinity` or `NaN`) for
+     * the given [args] even when every child in [args] is finite.
+     */
+    public fun mayProduceNonFiniteFloatForArgs(args: List<RemoteStateCacheKey>): Boolean = false
+
     /** Formats this operation AST using its evaluated operand [args]. */
     public fun toDebugString(args: List<RemoteStateCacheKey>): String
 
@@ -129,6 +197,21 @@ public interface RemoteOperation {
      */
     public fun reconstruct(args: List<RemoteValue<*>>): RemoteValue<*> =
         throw UnsupportedOperationException("Reconstruction is not supported for $this")
+
+    /**
+     * Reports whether this operation yields a whole number whenever its result is finite.
+     *
+     * Operations that always truncate or produce discrete values (such as [floor], [ceil], [round],
+     * comparisons, or integer ops) return `true`. Integer-preserving operations inspect [args]
+     * lazily via [RemoteStateCacheKey.isResultWholeNumber] (for example, `+` and `*` require both
+     * operands to be integer-valued, while `select` requires both result arms to be
+     * integer-valued). Operations that may introduce fractions (such as `/` or [sin]) return
+     * `false`.
+     *
+     * @param args operand cache keys in [RemoteStateCacheKey.args]
+     * @return `true` if every finite result has no fractional part
+     */
+    public fun isResultWholeNumber(args: List<RemoteStateCacheKey>): Boolean = false
 }
 
 /**
@@ -176,6 +259,21 @@ public abstract class BaseRemoteStateCacheKey : RemoteStateCacheKey {
      */
     public open fun setState(state: RemoteValue<*>?) {}
 
+    /**
+     * Precomputed bitmask of expression properties ([FLAG_DETERMINISTIC],
+     * [FLAG_HAS_NON_FINITE_FLOAT], [FLAG_RESULT_WHOLE_NUMBER]) synthesized bottom-up at
+     * construction time in `O(1)`.
+     */
+    internal open val expressionFlags: Int
+        get() = FLAG_DETERMINISTIC
+
+    override val isResultWholeNumber: Boolean
+        get() = (expressionFlags and FLAG_RESULT_WHOLE_NUMBER) != 0
+
+    override fun isDeterministic(requireFiniteFloats: Boolean): Boolean =
+        (expressionFlags and FLAG_DETERMINISTIC) != 0 &&
+            (!requireFiniteFloats || (expressionFlags and FLAG_HAS_NON_FINITE_FLOAT) == 0)
+
     final override fun hashCode(): Int {
         if (_hashCode == 0) {
             _hashCode = hashCodeImpl()
@@ -191,7 +289,10 @@ public abstract class BaseRemoteStateCacheKey : RemoteStateCacheKey {
 
 /** A fallback cache key based on the identity of this key instance. */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-public class RemoteStateInstanceKey : BaseRemoteStateCacheKey() {
+public class RemoteStateInstanceKey
+internal constructor(private val isDeterministicInstance: Boolean) : BaseRemoteStateCacheKey() {
+    public constructor() : this(isDeterministicInstance = true)
+
     private var state: RemoteValue<*>? = null
 
     override fun getState(): RemoteValue<*>? = state
@@ -199,6 +300,16 @@ public class RemoteStateInstanceKey : BaseRemoteStateCacheKey() {
     override fun setState(state: RemoteValue<*>?) {
         this.state = state
     }
+
+    private val baseExpressionFlags: Int = if (isDeterministicInstance) FLAG_DETERMINISTIC else 0
+
+    override val expressionFlags: Int
+        get() =
+            if (state.isIntegralValueType()) {
+                baseExpressionFlags or FLAG_RESULT_WHOLE_NUMBER
+            } else {
+                baseExpressionFlags
+            }
 
     override fun hashCodeImpl(): Int = System.identityHashCode(this)
 
@@ -268,6 +379,19 @@ public class RemoteConstantCacheKey(public val value: Any?) : BaseRemoteStateCac
             is Enum<*> -> "${value::class.simpleName}.${value.name}"
             else -> value.toString()
         }
+
+    private val baseExpressionFlags: Int =
+        FLAG_DETERMINISTIC or
+            (if (value is Float && !value.isFinite()) FLAG_HAS_NON_FINITE_FLOAT else 0) or
+            (if (value.isConstantWholeNumber()) FLAG_RESULT_WHOLE_NUMBER else 0)
+
+    override val expressionFlags: Int
+        get() =
+            if (getState() is MutableRemoteFloat) {
+                baseExpressionFlags and FLAG_RESULT_WHOLE_NUMBER.inv()
+            } else {
+                baseExpressionFlags
+            }
 }
 
 /** A cache key for constant color values, identified by their packed ARGB integer value. */
@@ -317,6 +441,14 @@ public class RemoteNamedCacheKey(
         return true
     }
 
+    override val expressionFlags: Int
+        get() =
+            if (state.isIntegralValueType()) {
+                FLAG_DETERMINISTIC or FLAG_RESULT_WHOLE_NUMBER
+            } else {
+                FLAG_DETERMINISTIC
+            }
+
     override fun hashCodeImpl(): Int {
         var result = domain.hashCode()
         result = 31 * result + name.hashCode()
@@ -346,6 +478,27 @@ internal class RemoteStateIdKey(internal val id: Int) : BaseRemoteStateCacheKey(
     }
 
     override fun hashCodeImpl(): Int = id
+
+    private val baseExpressionFlags: Int =
+        FLAG_DETERMINISTIC or
+            (if (id <= 0) {
+                // id == 0 (Utils.idFromNan) or id == -1 (NanEncoding.idFromNan) encodes literal
+                // IEEE Float.NaN rather than a valid variable ID.
+                FLAG_HAS_NON_FINITE_FLOAT
+            } else {
+                0
+            }) or
+            (if (isIntegerContextId(id)) FLAG_RESULT_WHOLE_NUMBER else 0)
+
+    override val expressionFlags: Int
+        get() {
+            val s = state
+            return when {
+                s is MutableRemoteFloat -> baseExpressionFlags and FLAG_RESULT_WHOLE_NUMBER.inv()
+                s.isIntegralValueType() -> baseExpressionFlags or FLAG_RESULT_WHOLE_NUMBER
+                else -> baseExpressionFlags
+            }
+        }
 
     override fun toString(): String = "RemoteStateIdKey(id=$id)"
 
@@ -520,7 +673,61 @@ public class RemoteOperationCacheKey(
         }
     }
 
+    private val baseExpressionFlags: Int = computeExpressionFlags(op, args)
+
+    override val expressionFlags: Int
+        get() =
+            if (state is MutableRemoteFloat) {
+                baseExpressionFlags and FLAG_RESULT_WHOLE_NUMBER.inv()
+            } else {
+                baseExpressionFlags
+            }
+
     public companion object {
+        /**
+         * Synthesizes the bottom-up [expressionFlags] bitmask (`O(1)`) for [op] applied to [args].
+         *
+         * * Clears [FLAG_DETERMINISTIC] if [op] is a [RemoteOperation] with `isDeterministic ==
+         *   false` or any child in [args] is non-deterministic. (Plain [Enum] keys that do not
+         *   implement [RemoteOperation] default to deterministic.)
+         * * Sets [FLAG_HAS_NON_FINITE_FLOAT] if [op] reports
+         *   [RemoteOperation.mayProduceNonFiniteFloatForArgs] for [args] or any child in [args]
+         *   already carries [FLAG_HAS_NON_FINITE_FLOAT].
+         * * Sets [FLAG_RESULT_WHOLE_NUMBER] if [op] is a [RemoteOperation] whose
+         *   [RemoteOperation.isResultWholeNumber] returns `true` for [args].
+         *
+         * @param op operation key identifying the AST node
+         * @param args child operand cache keys
+         * @return combined bitmask of [FLAG_DETERMINISTIC], [FLAG_HAS_NON_FINITE_FLOAT], and
+         *   [FLAG_RESULT_WHOLE_NUMBER]
+         */
+        internal fun computeExpressionFlags(op: Enum<*>, args: List<RemoteStateCacheKey>): Int {
+            val remoteOp = op as? RemoteOperation
+            var det = if (remoteOp?.isDeterministic == false) 0 else FLAG_DETERMINISTIC
+            var nonFinite =
+                if (remoteOp?.mayProduceNonFiniteFloatForArgs(args) == true) {
+                    FLAG_HAS_NON_FINITE_FLOAT
+                } else {
+                    0
+                }
+            val integerValued =
+                if (remoteOp?.isResultWholeNumber(args) == true) FLAG_RESULT_WHOLE_NUMBER else 0
+            for (i in args.indices) {
+                val childFlags =
+                    (args[i] as? BaseRemoteStateCacheKey)?.expressionFlags
+                        ?: if (!args[i].isDeterministic(requireFiniteFloats = false)) {
+                            0
+                        } else if (!args[i].isDeterministic(requireFiniteFloats = true)) {
+                            FLAG_DETERMINISTIC or FLAG_HAS_NON_FINITE_FLOAT
+                        } else {
+                            FLAG_DETERMINISTIC
+                        }
+                det = det and (childFlags and FLAG_DETERMINISTIC)
+                nonFinite = nonFinite or (childFlags and FLAG_HAS_NON_FINITE_FLOAT)
+            }
+            return det or nonFinite or integerValued
+        }
+
         /** Creates a [RemoteOperationCacheKey] by converting [args] to a list of cache keys. */
         public fun create(op: Enum<*>, vararg args: Any?): RemoteOperationCacheKey =
             RemoteOperationCacheKey(op, toCacheKeyList(args))
@@ -561,6 +768,40 @@ internal fun toCacheKeyList(args: Array<out Any?>): List<RemoteStateCacheKey> {
 @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 public val RemoteValue<*>.cacheKey: RemoteStateCacheKey
     get() = requireRemoteValueAccess().cacheKey
+
+private fun RemoteValue<*>?.isIntegralValueType(): Boolean =
+    this is RemoteInt || this is RemoteBoolean || this is RemoteLong
+
+private fun Any?.isConstantWholeNumber(): Boolean =
+    when (this) {
+        is Int,
+        is Long,
+        is Short,
+        is Byte,
+        is Boolean -> true
+        is Float -> isWholeNumberConstant()
+        is Double -> isWholeNumberConstant()
+        else -> false
+    }
+
+private fun Float.isWholeNumberConstant(): Boolean = isFinite() && this == mathFloor(this)
+
+private fun Double.isWholeNumberConstant(): Boolean = isFinite() && this == mathFloor(this)
+
+private fun isIntegerContextId(id: Int): Boolean =
+    when (id) {
+        RemoteContext.ID_TIME_IN_SEC,
+        RemoteContext.ID_TIME_IN_MIN,
+        RemoteContext.ID_TIME_IN_HR,
+        RemoteContext.ID_CALENDAR_MONTH,
+        RemoteContext.ID_OFFSET_TO_UTC,
+        RemoteContext.ID_WEEK_DAY,
+        RemoteContext.ID_DAY_OF_MONTH,
+        RemoteContext.ID_DAY_OF_YEAR,
+        RemoteContext.ID_YEAR,
+        RemoteContext.ID_EPOCH_SECOND -> true
+        else -> false
+    }
 
 /** The canonical domain identifier for user-defined state in the RemoteCompose wire protocol. */
 internal const val USER_DOMAIN: String = "USER"

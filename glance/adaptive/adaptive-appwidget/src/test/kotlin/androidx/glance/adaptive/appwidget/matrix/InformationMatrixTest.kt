@@ -19,6 +19,7 @@ package androidx.glance.adaptive.appwidget.matrix
 import android.app.Activity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.glance.adaptive.appwidget.components.actionrail.ActionRailDefaults
 import androidx.glance.adaptive.appwidget.selection.AppWidgetSurface
 import androidx.glance.adaptive.core.action.GlanceAdaptiveAction
 import androidx.glance.adaptive.core.selection.Dimensions
@@ -88,6 +89,40 @@ class InformationMatrixTest {
         val narrow = resolve(content, at(68, 176))
         assertThat(narrow.padding).isEqualTo(8.dp)
         assertThat(narrow.leadingSize).isEqualTo(52.dp)
+    }
+
+    @Test
+    fun card_rowHeaderGivesUpPaddingBeforeShrinkingTheLeadingComponentInShortContainers() {
+        val content =
+            MatrixCardContent(leading = Ring(progress = 0.5f), primary = TemplateText("11,056"))
+
+        val nominal = resolve(content, at(176, 88))
+        assertThat(nominal.padding).isEqualTo(16.dp)
+        assertThat(nominal.leadingSize).isEqualTo(56.dp)
+        assertThat(nominal.headerRowMinHeight).isEqualTo(56.dp)
+
+        // Tight H1 cell gives up padding first so the ring keeps its full 56 dp size.
+        val tightHome = resolve(content, at(176, 76))
+        assertThat(tightHome.padding).isEqualTo(10.dp)
+        assertThat(tightHome.leadingSize).isEqualTo(56.dp)
+        assertThat(tightHome.headerRowMinHeight).isEqualTo(56.dp)
+
+        // Lock screen 176x56 dp hits the 8 dp padding floor and shrinks the ring and row minHeight
+        // to the remaining 40 dp content height.
+        val lockScreen = resolve(content, at(176, 56, AppWidgetSurface.MOBILE_LOCK_SCREEN))
+        assertThat(lockScreen.padding).isEqualTo(8.dp)
+        assertThat(lockScreen.leadingSize).isEqualTo(40.dp)
+        assertThat(lockScreen.headerRowMinHeight).isEqualTo(40.dp)
+
+        // A standard row header with no leading component (e.g. bar-chart-only TrackTemplate on
+        // lock screen) also yields padding against the 56 dp row minHeight.
+        val textOnly =
+            resolve(
+                MatrixCardContent(primary = TemplateText("11,056")),
+                at(176, 56, AppWidgetSurface.MOBILE_LOCK_SCREEN),
+            )
+        assertThat(textOnly.padding).isEqualTo(8.dp)
+        assertThat(textOnly.headerRowMinHeight).isEqualTo(40.dp)
     }
 
     @Test
@@ -322,6 +357,45 @@ class InformationMatrixTest {
         // metric, or 24 dp with a 64 dp trailing pill + 8 dp gap: too narrow for it at 16 sp.
         assertThat((without.primary as TemplateText).value).isEqualTo("1,234,567")
         assertThat((with.primary as TemplateText).value).isNotEqualTo("1,234,567")
+    }
+
+    @Test
+    fun card_containedTrailingButtonShrinksWithLeadingInShortContainers() {
+        val content =
+            MatrixCardContent(
+                leading = Icon(GLYPH),
+                primary = TemplateText("Workout"),
+                trailing = IconButton(GLYPH, "Start", ACTION),
+                padding = 12.dp,
+                leadingSize = 56.dp,
+            )
+
+        val nominal = resolve(content, at(264, 88))
+        assertThat(nominal.leadingSize).isEqualTo(56.dp)
+        assertThat(nominal.trailingSize).isEqualTo(56.dp)
+
+        // Tight H1 cell (76 - 24 = 52 dp content height) shrinks both slots together.
+        val tight = resolve(content, at(264, 76))
+        assertThat(tight.leadingSize).isEqualTo(52.dp)
+        assertThat(tight.trailingSize).isEqualTo(52.dp)
+
+        // With default padding and a small leading icon, the 56 dp contained trailing button
+        // still yields padding first before shrinking.
+        val smallLeading =
+            MatrixCardContent(
+                leading = Icon(GLYPH),
+                primary = TemplateText("Workout"),
+                trailing = IconButton(GLYPH, "Start", ACTION),
+                leadingSize = 20.dp,
+            )
+        val tightDefaultPadding = resolve(smallLeading, at(176, 76))
+        assertThat(tightDefaultPadding.padding).isEqualTo(10.dp)
+        assertThat(tightDefaultPadding.trailingSize).isEqualTo(56.dp)
+
+        val shortDefaultPadding =
+            resolve(smallLeading, at(176, 56, AppWidgetSurface.MOBILE_LOCK_SCREEN))
+        assertThat(shortDefaultPadding.padding).isEqualTo(8.dp)
+        assertThat(shortDefaultPadding.trailingSize).isEqualTo(40.dp)
     }
 
     @Test
@@ -601,6 +675,7 @@ class InformationMatrixTest {
                         sensitiveReplacement = "Action",
                         contained = false,
                     ),
+                liveResize = LiveResizeSpec(collapseHeaderInCompactHeight = true),
                 hero = list,
             )
 
@@ -609,6 +684,7 @@ class InformationMatrixTest {
         assertThat(unlocked.hero).isSameInstanceAs(list)
 
         val resolved = resolve(content, at(176, 88, AppWidgetSurface.MOBILE_LOCK_SCREEN))
+        assertThat(resolved.liveResize?.collapseHeaderInCompactHeight).isTrue()
         val lockedTrailing = resolved.trailing as IconButton
         assertThat(lockedTrailing.contentDescription).isEqualTo("Action")
         assertThat(lockedTrailing.contained).isFalse()
@@ -776,6 +852,136 @@ class InformationMatrixTest {
             .isGreaterThan(resolvedContainedH2.secondaryMaxWidth!!.value)
         assertThat(resolvedUncontainedH2.heroHeight!!.value)
             .isGreaterThan(resolvedContainedH2.heroHeight!!.value)
+    }
+
+    @Test
+    fun card_quickActionsValidationRedactionAndWidthBudget() {
+        val primary = IconButton(GLYPH, "New note", ACTION, sensitiveReplacement = "Add")
+        val secondary = IconButton(GLYPH, "Voice note", ACTION, contained = false)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            CardQuickActions.AdaptiveRail(emptyList())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            MatrixCardContent(
+                actions = listOf(TemplateText("Goal")),
+                quickActions = CardQuickActions.Floating(primary),
+            )
+        }
+
+        val railCard =
+            MatrixCardContent(
+                primary = TemplateText("Notes"),
+                secondary = TemplateText("Updated"),
+                quickActions = CardQuickActions.AdaptiveRail(listOf(primary, secondary)),
+                padding = 10.dp,
+            )
+        val unlockedRail = resolve(railCard, at(264, 229))
+        assertThat(unlockedRail.contentHeight).isEqualTo(209.dp)
+        assertThat(unlockedRail.quickActions).isSameInstanceAs(railCard.quickActions)
+
+        val noRail =
+            resolve(
+                MatrixCardContent(
+                    primary = TemplateText("Notes"),
+                    secondary = TemplateText("Updated"),
+                    padding = 10.dp,
+                ),
+                at(264, 229),
+            )
+        assertThat(unlockedRail.secondaryMaxWidth!!.value)
+            .isLessThan(noRail.secondaryMaxWidth!!.value)
+
+        val lockedRail =
+            resolve(railCard, at(264, 229, AppWidgetSurface.MOBILE_LOCK_SCREEN)).quickActions
+                as CardQuickActions.AdaptiveRail
+        assertThat(lockedRail.actions[0].contentDescription).isEqualTo("Add")
+        assertThat(lockedRail.actions[1]).isSameInstanceAs(secondary)
+
+        val floatingCard = MatrixCardContent(quickActions = CardQuickActions.Floating(primary))
+        val lockedFloating =
+            resolve(floatingCard, at(176, 132, AppWidgetSurface.MOBILE_LOCK_SCREEN)).quickActions
+                as CardQuickActions.Floating
+        assertThat(lockedFloating.action.contentDescription).isEqualTo("Add")
+
+        // Non-sensitive quickActions return the exact same instance on the lock screen, and
+        // unsized containers leave contentHeight null.
+        val plainFloating = CardQuickActions.Floating(secondary)
+        val plainRail = CardQuickActions.AdaptiveRail(listOf(secondary))
+        assertThat(
+                resolve(
+                        MatrixCardContent(quickActions = plainFloating),
+                        at(0, 0, AppWidgetSurface.MOBILE_LOCK_SCREEN),
+                    )
+                    .also { assertThat(it.contentHeight).isNull() }
+                    .quickActions
+            )
+            .isSameInstanceAs(plainFloating)
+        assertThat(
+                resolve(
+                        MatrixCardContent(quickActions = plainRail),
+                        at(264, 229, AppWidgetSurface.MOBILE_LOCK_SCREEN),
+                    )
+                    .quickActions
+            )
+            .isSameInstanceAs(plainRail)
+    }
+
+    @Test
+    fun liveResizeSpec_rejectsNegativePaddingOrSpacingAndNonPositiveWidthThreshold() {
+        assertThrows(IllegalArgumentException::class.java) {
+            LiveResizeSpec(compactHeightVerticalPadding = (-1).dp)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            LiveResizeSpec(compactHeightSlotSpacing = (-1).dp)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            LiveResizeSpec(collapseHeaderTrailingBelowWidthDp = 0.dp)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            LiveResizeSpec(collapseHeaderTrailingBelowWidthDp = (-10).dp)
+        }
+        val zeroSpec =
+            LiveResizeSpec(
+                compactHeightVerticalPadding = 0.dp,
+                compactHeightSlotSpacing = 0.dp,
+                collapseHeaderTrailingBelowWidthDp = 160.dp,
+            )
+        assertThat(zeroSpec.compactHeightVerticalPadding).isEqualTo(0.dp)
+        assertThat(zeroSpec.compactHeightSlotSpacing).isEqualTo(0.dp)
+    }
+
+    @Test
+    fun card_stackHeaderInNarrowWidthFalseKeepsHorizontalHeaderAndCompactUncontainedTrailing() {
+        val card =
+            MatrixCardContent(
+                primary = TemplateText("Brief"),
+                trailing = IconButton(GLYPH, "Refresh", ACTION, contained = false),
+                compactHeader = true,
+                stackHeaderInNarrowWidth = false,
+            )
+        val resolved = resolve(card, at(88, 88))
+        assertThat(resolved.stacked).isFalse()
+        assertThat(resolved.trailing).isNotNull()
+        assertThat(MatrixDefaults.uncontainedTrailingWidth(resolved.tiers)).isEqualTo(24.dp)
+        assertThat(MatrixDefaults.uncontainedTrailingGlyphSize(resolved.tiers)).isEqualTo(16.dp)
+        assertThat(MatrixDefaults.uncontainedTrailingWidth(SizeTiers(WidthTier.W2, HeightTier.H2)))
+            .isEqualTo(40.dp)
+        assertThat(
+                MatrixDefaults.uncontainedTrailingGlyphSize(SizeTiers(WidthTier.W2, HeightTier.H2))
+            )
+            .isEqualTo(24.dp)
+    }
+
+    @Test
+    fun actionRailDefaults_maxFittingActionsPreventsCrushedIcons() {
+        assertThat(ActionRailDefaults.maxFittingActions(null, HeightTier.H3)).isEqualTo(4)
+        assertThat(ActionRailDefaults.maxFittingActions(null, HeightTier.H4)).isEqualTo(6)
+        assertThat(ActionRailDefaults.maxFittingActions(209f, HeightTier.H4)).isEqualTo(6)
+        assertThat(ActionRailDefaults.maxFittingActions(195f, HeightTier.H4)).isEqualTo(5)
+        assertThat(ActionRailDefaults.maxFittingActions(134f, HeightTier.H3)).isEqualTo(4)
+        assertThat(ActionRailDefaults.maxFittingActions(110f, HeightTier.H3)).isEqualTo(3)
+        assertThat(ActionRailDefaults.maxFittingActions(20f, HeightTier.H3)).isEqualTo(1)
     }
 
     private fun at(

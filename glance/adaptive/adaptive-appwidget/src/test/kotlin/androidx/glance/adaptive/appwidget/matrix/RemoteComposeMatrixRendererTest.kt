@@ -50,7 +50,7 @@ import androidx.glance.adaptive.core.slots.IconButton
 import androidx.glance.adaptive.core.slots.Ring
 import androidx.glance.adaptive.core.slots.TemplateText
 import androidx.glance.adaptive.core.templates.GlanceAdaptiveTemplate
-import androidx.glance.adaptive.core.templates.TrackTemplate
+import androidx.glance.adaptive.core.templates.track.TrackTemplate
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.test.runTest
@@ -445,6 +445,42 @@ class RemoteComposeMatrixRendererTest {
         assertThat(h2UnpaddedChildren.first().width - h2PaddedChildren.first().width)
             .isWithin(1f)
             .of(24.dpToPx(context))
+
+        // In narrow W1 horizontal headers, an uncontained trailing button shrinks to 24 x 24 dp.
+        val w1 =
+            render(
+                MatrixCardContent(
+                    primary = TemplateText("Brief"),
+                    trailing = IconButton(TEST_VECTOR_GLYPH, "Refresh", action, contained = false),
+                    compactHeader = true,
+                    stackHeaderInNarrowWidth = false,
+                ),
+                Dimensions(88, 88),
+            )
+        val w1Trailing = w1.cardColumn().layoutChildren().single().layoutChildren().last()
+        assertThat(w1Trailing.width).isWithin(1f).of(24.dpToPx(context))
+        assertThat(w1Trailing.height).isWithin(1f).of(24.dpToPx(context))
+    }
+
+    @Test
+    fun lockScreenTrackCard_shrinksRingAndHeaderMinHeightToFitContainer() = runTest {
+        val template =
+            TrackTemplate(
+                leading = Ring(progress = 0.78f, icon = TEST_VECTOR_GLYPH),
+                primary = TemplateText("11,056", sensitiveReplacement = "--"),
+            )
+        val dimensions = Dimensions(176, 56)
+        val sized = AppWidgetSurface.MOBILE_LOCK_SCREEN.withDimensions(dimensions)
+        val matrix = TrackMatrixSelector.select(template, sized)
+        val rendered = render(matrix, dimensions, surface = AppWidgetSurface.MOBILE_LOCK_SCREEN)
+
+        val headerRow = rendered.cardColumn().layoutChildren().single()
+        val ringBox = headerRow.layoutChildren().first()
+        val expectedRingPx = 40.dpToPx(context)
+        assertThat(headerRow.height).isWithin(1f).of(expectedRingPx)
+        assertThat(ringBox.width).isWithin(1f).of(expectedRingPx)
+        assertThat(ringBox.height).isWithin(1f).of(expectedRingPx)
+        assertThat(rendered.texts()).containsExactly("--")
     }
 
     private suspend fun render(

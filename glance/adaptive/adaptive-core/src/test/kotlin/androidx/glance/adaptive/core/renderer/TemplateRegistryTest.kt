@@ -228,4 +228,83 @@ class TemplateRegistryTest {
 
         assertThat(error).hasMessageThat().contains(AbstractTestTemplate::class.java.name)
     }
+
+    @Test
+    fun removeOverride_restoresDefaultOnlyForTargetWidgetAndSurface() {
+        registry.registerDefault(TestTemplate::class.java, renderer("default"))
+        registry.registerOverride("custom", TestTemplate::class.java, renderer("custom-lock"), lock)
+        registry.registerOverride("custom", TestTemplate::class.java, renderer("custom-home"), home)
+        registry.registerOverride("other", TestTemplate::class.java, renderer("other-lock"), lock)
+
+        registry.removeOverride("custom", TestTemplate::class.java, lock)
+
+        assertThat(registry.render(TestTemplate("Run"), lock, widgetName = "custom"))
+            .startsWith("default:")
+        assertThat(registry.render(TestTemplate("Run"), home, widgetName = "custom"))
+            .startsWith("custom-home:")
+        assertThat(registry.render(TestTemplate("Run"), lock, widgetName = "other"))
+            .startsWith("other-lock:")
+    }
+
+    @Test
+    fun removeOverride_withNullSurface_removesAllSurfacesForWidget() {
+        registry.registerDefault(TestTemplate::class.java, renderer("default"))
+        registry.registerOverride("custom", TestTemplate::class.java, renderer("custom"))
+
+        registry.removeOverride("custom", TestTemplate::class.java)
+
+        assertThat(registry.render(TestTemplate("Run"), home, widgetName = "custom"))
+            .startsWith("default:")
+        assertThat(registry.render(TestTemplate("Run"), lock, widgetName = "custom"))
+            .startsWith("default:")
+    }
+
+    @Test
+    fun removeOverride_whenNotRegistered_isNoOp() {
+        registry.registerDefault(TestTemplate::class.java, renderer("default"))
+
+        registry.removeOverride("missing", TestTemplate::class.java, home)
+
+        assertThat(registry.render(TestTemplate("Run"), home, widgetName = "missing"))
+            .startsWith("default:")
+    }
+
+    @Test
+    fun removeOverride_blankWidgetNameOrAbstractClass_throwsIllegalArgumentException() {
+        assertThrows(IllegalArgumentException::class.java) {
+            registry.removeOverride("", TestTemplate::class.java, home)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            registry.removeOverride("   ", TestTemplate::class.java, home)
+        }
+        val error =
+            assertThrows(IllegalArgumentException::class.java) {
+                registry.removeOverride("custom", AbstractTestTemplate::class.java, home)
+            }
+        assertThat(error).hasMessageThat().contains(AbstractTestTemplate::class.java.name)
+    }
+
+    @Test
+    fun hasOverride_reflectsRegisteredAndRemovedOverrides() {
+        assertThat(registry.hasOverride("custom", TestTemplate::class.java, lock)).isFalse()
+
+        registry.registerOverride("custom", TestTemplate::class.java, renderer("custom"), lock)
+
+        assertThat(registry.hasOverride("custom", TestTemplate::class.java, lock)).isTrue()
+        assertThat(
+                registry.hasOverride(
+                    "custom",
+                    TestTemplate::class.java,
+                    TestSurface("lock", Dimensions(200, 100)),
+                )
+            )
+            .isTrue()
+        assertThat(registry.hasOverride("custom", TestTemplate::class.java, home)).isFalse()
+        assertThat(registry.hasOverride("other", TestTemplate::class.java, lock)).isFalse()
+        assertThat(registry.hasOverride("custom", OtherTemplate::class.java, lock)).isFalse()
+
+        registry.removeOverride("custom", TestTemplate::class.java, lock)
+
+        assertThat(registry.hasOverride("custom", TestTemplate::class.java, lock)).isFalse()
+    }
 }
