@@ -429,14 +429,11 @@ public object ComposeFoundationFlags {
     /**
      * Controls whether performance optimizations for [androidx.compose.ui.text.LinkAnnotation] in
      * [androidx.compose.foundation.text.BasicText] are enabled.
-     *
-     * This flag is off by default: the optimizations are opt-in until the google3 screenshot test
-     * breakage they caused (b/583304699) is resolved.
      */
-    // TODO: Enable by default and then remove this flag once it has soaked (b/581556315)
+    // TODO: Remove this flag once it has soaked (b/581556315)
     @field:Suppress("MutableBareField")
     @JvmField
-    public var isLinkPerformanceOptimizationEnabled: Boolean = false
+    public var isLinkPerformanceOptimizationEnabled: Boolean = true
 
     /**
      * When `true`, text in [androidx.compose.ui.layout.LookaheadScope] lays out once during the
@@ -458,6 +455,16 @@ public object ComposeFoundationFlags {
     @field:Suppress("MutableBareField")
     @JvmField
     public var isTextFieldScrollerOrientationRestoreFixEnabled: Boolean = true
+
+    /**
+     * Controls whether bring-into-view requests in lazy layouts account for main-axis
+     * `contentPadding` when scrolling items into view. When disabled, bring-into-view only accounts
+     * for sticky header insets and ignores `contentPadding`.
+     */
+    // TODO: b/590395235
+    @field:Suppress("MutableBareField")
+    @JvmField
+    public var isLazyLayoutBringIntoViewContentPaddingEnabled: Boolean = true
 }
 
 /** The initial value of [ComposeFoundationFlags.isNewContextMenuEnabled] */

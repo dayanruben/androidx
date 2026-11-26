@@ -16,12 +16,22 @@
 
 package androidx.wear.compose.material3
 
+import android.content.res.Configuration
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.GraphicsLayerScope
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -285,6 +295,164 @@ class ResponsiveTransformationSpecTest {
 
         rule.waitForIdle()
         assertThat(state!!.layoutInfo.visibleItems.size).isLessThan(100)
+    }
+
+    @Test
+    fun responsive_transformation_spec_respects_custom_target_value() {
+        val spec =
+            ResponsiveTransformationSpec.smallScreen(
+                minElementHeightFraction = 0.2f,
+                maxElementHeightFraction = 0.6f,
+                minTransitionAreaHeightFraction = 0.5f,
+                maxTransitionAreaHeightFraction = 0.5f,
+                easing = LinearEasing,
+                containerAlpha =
+                    TransformationVariableSpec(
+                        topValue = 0.25f,
+                        targetValue = 0.75f,
+                        bottomValue = 0.35f,
+                    ),
+                contentAlpha =
+                    TransformationVariableSpec(
+                        topValue = 0.2f,
+                        targetValue = 0.6f,
+                        bottomValue = 0.4f,
+                    ),
+                scale =
+                    TransformationVariableSpec(
+                        topValue = 0.5f,
+                        targetValue = 0.8f,
+                        bottomValue = 0.5f,
+                    ),
+            )
+        val centerProgress =
+            TransformingLazyColumnItemScrollProgress(
+                topOffsetFraction = 0.45f,
+                bottomOffsetFraction = 0.55f,
+            )
+        val topHalfwayProgress =
+            TransformingLazyColumnItemScrollProgress(
+                topOffsetFraction = 0.125f,
+                bottomOffsetFraction = 0.25f,
+            )
+        val bottomHalfwayProgress =
+            TransformingLazyColumnItemScrollProgress(
+                topOffsetFraction = 0.75f,
+                bottomOffsetFraction = 0.875f,
+            )
+
+        val centerContainerLayer =
+            GraphicsLayerScope().apply {
+                with(spec) { applyContainerTransformation(centerProgress) }
+            }
+        val centerContentLayer =
+            GraphicsLayerScope().apply { with(spec) { applyContentTransformation(centerProgress) } }
+        val topHalfwayContainerLayer =
+            GraphicsLayerScope().apply {
+                with(spec) { applyContainerTransformation(topHalfwayProgress) }
+            }
+        val topHalfwayContentLayer =
+            GraphicsLayerScope().apply {
+                with(spec) { applyContentTransformation(topHalfwayProgress) }
+            }
+        val bottomHalfwayContainerLayer =
+            GraphicsLayerScope().apply {
+                with(spec) { applyContainerTransformation(bottomHalfwayProgress) }
+            }
+        val bottomHalfwayContentLayer =
+            GraphicsLayerScope().apply {
+                with(spec) { applyContentTransformation(bottomHalfwayProgress) }
+            }
+
+        assertThat(spec.getTransformedHeight(100, centerProgress)).isEqualTo(80)
+        assertThat(centerContainerLayer.alpha).isWithin(EPSILON).of(0.75f)
+        assertThat(centerContainerLayer.scaleX).isWithin(EPSILON).of(0.8f)
+        assertThat(centerContainerLayer.scaleY).isWithin(EPSILON).of(0.8f)
+        assertThat(centerContentLayer.alpha).isWithin(EPSILON).of(0.6f)
+        assertThat(spec.getTransformedHeight(100, topHalfwayProgress)).isEqualTo(65)
+        assertThat(topHalfwayContainerLayer.alpha).isWithin(EPSILON).of(0.5f)
+        assertThat(topHalfwayContainerLayer.scaleX).isWithin(EPSILON).of(0.65f)
+        assertThat(topHalfwayContainerLayer.scaleY).isWithin(EPSILON).of(0.65f)
+        assertThat(topHalfwayContentLayer.alpha).isWithin(EPSILON).of(0.4f)
+        assertThat(spec.getTransformedHeight(100, bottomHalfwayProgress)).isEqualTo(65)
+        assertThat(bottomHalfwayContainerLayer.alpha).isWithin(EPSILON).of(0.55f)
+        assertThat(bottomHalfwayContainerLayer.scaleX).isWithin(EPSILON).of(0.65f)
+        assertThat(bottomHalfwayContainerLayer.scaleY).isWithin(EPSILON).of(0.65f)
+        assertThat(bottomHalfwayContentLayer.alpha).isWithin(EPSILON).of(0.5f)
+    }
+
+    @Test
+    fun remember_responsive_vararg_reuses_instance_across_recompositions() {
+        var recomposeTrigger by mutableIntStateOf(0)
+        var smallScreenSize by mutableStateOf(192.dp)
+        var compositionCount = 0
+        lateinit var spec: TransformationSpec
+
+        rule.setContent {
+            val baseConfig = LocalConfiguration.current
+            val config =
+                remember(baseConfig) { Configuration(baseConfig).apply { screenWidthDp = 210 } }
+            CompositionLocalProvider(LocalConfiguration provides config) {
+                compositionCount += if (recomposeTrigger >= 0) 1 else 0
+                spec =
+                    rememberTransformationSpec(
+                        ResponsiveTransformationSpec.smallScreen(screenSize = smallScreenSize),
+                        ResponsiveTransformationSpec.largeScreen(),
+                    )
+            }
+        }
+
+        val firstSpec = rule.runOnIdle {
+            assertThat(compositionCount).isEqualTo(1)
+            spec
+        }
+
+        rule.runOnIdle { recomposeTrigger++ }
+
+        rule.runOnIdle {
+            assertThat(compositionCount).isEqualTo(2)
+            assertThat(spec).isSameInstanceAs(firstSpec)
+        }
+
+        rule.runOnIdle { smallScreenSize = 200.dp }
+
+        rule.runOnIdle {
+            assertThat(compositionCount).isEqualTo(3)
+            assertThat(spec).isNotSameInstanceAs(firstSpec)
+            assertThat((spec as ResponsiveTransformationSpecImpl).minElementHeightFraction)
+                .isNotEqualTo(
+                    (firstSpec as ResponsiveTransformationSpecImpl).minElementHeightFraction
+                )
+        }
+    }
+
+    @Test
+    fun responsive_spec_equals_and_hashCode_includes_screenSize() {
+        val spec192 = ResponsiveTransformationSpec.smallScreen(screenSize = 192.dp)
+        val spec192Duplicate = ResponsiveTransformationSpec.smallScreen(screenSize = 192.dp)
+        val spec220 = ResponsiveTransformationSpec.smallScreen(screenSize = 220.dp)
+        val minusOneHashEasing =
+            object : Easing {
+                override fun transform(fraction: Float): Float = fraction
+
+                override fun hashCode(): Int = -1
+            }
+        val specScaleA =
+            ResponsiveTransformationSpec.smallScreen(
+                easing = minusOneHashEasing,
+                scale = TransformationVariableSpec(0.5f),
+            )
+        val specScaleB =
+            ResponsiveTransformationSpec.smallScreen(
+                easing = minusOneHashEasing,
+                scale = TransformationVariableSpec(0.7f),
+            )
+
+        assertThat(spec192).isEqualTo(spec192Duplicate)
+        assertThat(spec192.hashCode()).isEqualTo(spec192Duplicate.hashCode())
+        assertThat(spec192).isNotEqualTo(spec220)
+        assertThat(spec192.hashCode()).isNotEqualTo(spec220.hashCode())
+        assertThat(specScaleA.hashCode()).isNotEqualTo(specScaleB.hashCode())
     }
 
     private val EPSILON = 1e-5f

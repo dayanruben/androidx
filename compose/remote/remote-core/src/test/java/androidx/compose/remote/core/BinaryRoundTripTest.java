@@ -107,6 +107,8 @@ import androidx.compose.remote.core.operations.layout.ImpulseOperation;
 import androidx.compose.remote.core.operations.layout.ImpulseProcess;
 import androidx.compose.remote.core.operations.layout.LayoutComponentContent;
 import androidx.compose.remote.core.operations.layout.LoopOperation;
+import androidx.compose.remote.core.operations.layout.PropertyBundleLookupOperation;
+import androidx.compose.remote.core.operations.layout.PropertyBundleModifierOperation;
 import androidx.compose.remote.core.operations.layout.RootLayoutComponent;
 import androidx.compose.remote.core.operations.layout.TouchCancelModifierOperation;
 import androidx.compose.remote.core.operations.layout.TouchDownModifierOperation;
@@ -129,6 +131,7 @@ import androidx.compose.remote.core.operations.layout.managers.TextStyle;
 import androidx.compose.remote.core.operations.layout.modifiers.AlignByModifierOperation;
 import androidx.compose.remote.core.operations.layout.modifiers.BackgroundModifierOperation;
 import androidx.compose.remote.core.operations.layout.modifiers.BorderModifierOperation;
+import androidx.compose.remote.core.operations.layout.modifiers.ClipPathModifierOperation;
 import androidx.compose.remote.core.operations.layout.modifiers.ClipRectModifierOperation;
 import androidx.compose.remote.core.operations.layout.modifiers.CollapsiblePriorityModifierOperation;
 import androidx.compose.remote.core.operations.layout.modifiers.ComponentVisibilityOperation;
@@ -304,6 +307,7 @@ public class BinaryRoundTripTest {
                         null, null, null, null, null, null, null, null, null));
         originalOps.add(new ComponentStart(1, 16, 0f, 0f));
         originalOps.add(new ComponentValue(1, 16, 17));
+        originalOps.add(new PropertyBundleLookupOperation(18, 16, 15, -1));
         originalOps.add(new ContainerEnd());
 
         // --- Modifiers ---
@@ -321,6 +325,7 @@ public class BinaryRoundTripTest {
         originalOps.add(new DrawContentOperation());
         originalOps.add(new ClipRectModifierOperation());
         originalOps.add(new RoundedClipRectModifierOperation(0, 0, 10, 10));
+        originalOps.add(new ClipPathModifierOperation(101));
         originalOps.add(new CollapsiblePriorityModifierOperation(1, 10f));
         originalOps.add(new ComponentVisibilityOperation(2));
         originalOps.add(new DimensionConstraintsModifierOperation((byte) 0, 0f, 100f));
@@ -332,6 +337,9 @@ public class BinaryRoundTripTest {
         originalOps.add(new TouchCancelModifierOperation());
         originalOps.add(new TouchDownModifierOperation());
         originalOps.add(new TouchUpModifierOperation());
+        originalOps.add(
+                new PropertyBundleModifierOperation(
+                        1, 2, new int[] {15, 20}, new int[] {100, 200}));
         originalOps.add(new CoreSemantics(100, (byte) 1, 101, 102, 1, true, true));
 
         // --- Actions ---

@@ -15,6 +15,7 @@
  */
 package androidx.compose.remote.creation;
 
+import static androidx.compose.remote.core.operations.layout.PropertyBundleLookupOperation.SELF_COMPONENT_ID;
 import static androidx.compose.remote.core.operations.layout.modifiers.LayoutComputeOperation.TYPE_MEASURE;
 import static androidx.compose.remote.core.operations.layout.modifiers.LayoutComputeOperation.TYPE_POSITION;
 import static androidx.compose.remote.core.operations.utilities.AnimatedFloatExpression.A_DEREF;
@@ -48,6 +49,7 @@ import static androidx.compose.remote.core.operations.utilities.IntegerExpressio
 
 import androidx.annotation.RestrictTo;
 import androidx.compose.remote.core.CoreDocument;
+import androidx.compose.remote.core.Limits;
 import androidx.compose.remote.core.RcPlatformServices;
 import androidx.compose.remote.core.RemoteComposeBuffer;
 import androidx.compose.remote.core.RemoteComposeState;
@@ -118,6 +120,7 @@ public class RemoteComposeWriter {
     public static final int FONT_TYPE_MONOSPACE = PaintBundle.FONT_TYPE_MONOSPACE;
 
     protected final @NonNull RcPaint mPainter = new RcPaint(this);
+    protected final @NonNull RemoteComposeWriter3D mRc3DWriter = new RemoteComposeWriter3D(this);
 
     private @Nullable Object mWriterCallback = null;
     private int mInsertPoint = -1;
@@ -130,6 +133,15 @@ public class RemoteComposeWriter {
      */
     public @NonNull RcPaint getRcPaint() {
         return mPainter;
+    }
+
+    /**
+     * Returns the 3D writer extension object
+     *
+     * @return the 3D writer object
+     */
+    public @NonNull RemoteComposeWriter3D getRc3DWriter() {
+        return mRc3DWriter;
     }
 
     public @Nullable Object getWriterCallback() {
@@ -2100,6 +2112,7 @@ public class RemoteComposeWriter {
     public void drawTweenPath(int path1Id, int path2Id, float tween, float start, float stop) {
         mBuffer.addDrawTweenPath(path1Id, path2Id, tween, start, stop);
     }
+
     /**
      * Add an android Path object. (It is converted to internal path)
      *
@@ -2766,7 +2779,20 @@ public class RemoteComposeWriter {
      */
     public int definePattern(@NonNull String name, int @NonNull [] paramIds) {
         int id = addText(name);
-        return mBuffer.definePattern(id, paramIds);
+        return definePattern(id, paramIds);
+    }
+
+    /**
+     * Define a pattern with a pre-allocated id
+     *
+     * @param id       the id of the pattern
+     * @param paramIds the ids of the parameters
+     * @return the id of the pattern
+     */
+    public int definePattern(int id, int @NonNull [] paramIds) {
+        int result = mBuffer.definePattern(id, paramIds);
+        mState.pushDataScope();
+        return result;
     }
 
     /** Helper to cache raw any data values into state and return unique ID. */
@@ -2845,6 +2871,7 @@ public class RemoteComposeWriter {
      */
     public void endPatternDefine() {
         mBuffer.endPatternDefine();
+        mState.popDataScope();
     }
 
     /**
@@ -2998,6 +3025,34 @@ public class RemoteComposeWriter {
         int id = mState.cacheData(value);
         mBuffer.addAnimatedFloat(id, value, animation);
         return Utils.asNan(id);
+    }
+
+    /**
+     * Add a float expression that may exceed the 32-token limit by automatically spilling
+     * sub-expressions into hidden intermediate variables via {@link FloatExpressionOptimizer}.
+     */
+    public float floatBigExpression(float @NonNull [] value, float @Nullable [] animation) {
+        return FloatExpressionOptimizer.optimizeAndAdd(this, value, animation);
+    }
+
+    /**
+     * Add a vector expression: evaluates {@code values} (a vector RPN) and scatters its
+     * {@code dimension} components to consecutive variable ids {@code base..base+dim-1}.
+     *
+     * @return the base variable ID (encoded as a NaN float)
+     */
+    public float vectorExpression(int dimension, int flags, float @NonNull [] values) {
+        return Utils.asNan(vectorExpressionInt(dimension, flags, values));
+    }
+
+    /** Overload returning the raw integer variable ID (for low-level scattering). */
+    public int vectorExpressionInt(int dimension, int flags, float @NonNull [] values) {
+        int base = createID(0);
+        for (int i = 1; i < dimension; i++) {
+            createID(0); // consecutive: base+1 .. base+dimension-1
+        }
+        mBuffer.addVectorExpression(base, dimension, flags, values);
+        return base;
     }
 
     /**
@@ -4770,8 +4825,8 @@ public class RemoteComposeWriter {
     /**
      * Ensures the bitmap is stored.
      *
-     * @param url the bitmap to store
-     * @param width the bitmap width
+     * @param url    the bitmap to store
+     * @param width  the bitmap width
      * @param height the bitmap height
      * @return the id of the bitmap
      */
@@ -4943,6 +4998,24 @@ public class RemoteComposeWriter {
     }
 
     /**
+     * Add a particle loop where each update expression may be scalar or a vector (dim &gt; 1). A
+     * vector expression writes its components to that many consecutive particle variable slots.
+     *
+     * @param id   id of the particle system (encoded as NaN)
+     * @param dims dimensionality per expression (1 = scalar)
+     */
+    public void particlesLoop(
+            float id,
+            float @Nullable [] restart,
+            float @NonNull [] @NonNull [] expressions,
+            int @NonNull [] dims,
+            @NonNull Runnable r) {
+        mBuffer.addParticlesLoop(Utils.idFromNan(id), restart, expressions, dims);
+        r.run();
+        mBuffer.addParticleLoopEnd();
+    }
+
+    /**
      * Add a particle - particle comparison.
      * such as 2 particles collision detection
      *
@@ -4966,6 +5039,29 @@ public class RemoteComposeWriter {
             @Nullable Runnable r) {
         mBuffer.addParticlesComparison(Utils.idFromNan(id),
                 flags, min, max, condition, then1, then2);
+        if (r != null) r.run();
+        mBuffer.addParticleLoopEnd();
+    }
+
+    /**
+     * Two-body particle comparison where each then-equation may be scalar or vector.
+     *
+     * @param dims1 dimensionality per then1 equation (1 = scalar)
+     * @param dims2 dimensionality per then2 equation (1 = scalar)
+     */
+    public void particlesComparison(
+            float id,
+            short flags,
+            float min,
+            float max,
+            float @Nullable [] condition,
+            float @Nullable [][] then1,
+            float @Nullable [][] then2,
+            int @Nullable [] dims1,
+            int @Nullable [] dims2,
+            @Nullable Runnable r) {
+        mBuffer.addParticlesComparison(Utils.idFromNan(id),
+                flags, min, max, condition, then1, then2, dims1, dims2);
         if (r != null) r.run();
         mBuffer.addParticleLoopEnd();
     }
@@ -5364,6 +5460,13 @@ public class RemoteComposeWriter {
     }
 
     /**
+     * Add a clip path modifier
+     */
+    public void addClipPathModifier(int pathId) {
+        mBuffer.addClipPathModifier(pathId);
+    }
+
+    /**
      * Add a round clip rect modifier
      *
      * @param topStart    the top start value
@@ -5506,6 +5609,143 @@ public class RemoteComposeWriter {
             int @Nullable [] dataIds,
             float @Nullable [] condition) {
         mBuffer.addEventHandlerModifierOperation(type, filter, flags, dataIds, condition);
+    }
+
+    /**
+     * Adds a {@code PropertyBundleModifierOperation} to the buffer.
+     *
+     * @param bundleId the bundle identifier
+     * @param parentBundleId the parent bundle identifier
+     * @param propertyIds parallel array of property identifiers
+     * @param values parallel array of property variable identifiers
+     */
+    public void addPropertyBundleModifierOperation(
+            int bundleId,
+            int parentBundleId,
+            int @NonNull [] propertyIds,
+            int @NonNull [] values) {
+        mBuffer.addPropertyBundleModifierOperation(bundleId, parentBundleId, propertyIds, values);
+    }
+
+    /**
+     * Materializes literal integer values into {@link IntegerConstant} variables and emits a
+     * {@code PropertyBundleModifierOperation}.
+     *
+     * @param bundleId the bundle identifier
+     * @param parentBundleId the parent bundle identifier
+     * @param propertyIds parallel array of property identifiers
+     * @param values parallel array of literal integer property values
+     */
+    public void addPropertyBundleModifier(
+            int bundleId,
+            int parentBundleId,
+            int @NonNull [] propertyIds,
+            int @NonNull [] values) {
+        int count = propertyIds != null ? propertyIds.length : 0;
+        int valuesLen = values != null ? values.length : 0;
+        validatePropertyBundleArrayLengths(count, valuesLen);
+        int[] valueIds = new int[count];
+        for (int i = 0; i < count; i++) {
+            valueIds[i] = (int) (addInteger(values[i]) - 0x100000000L);
+        }
+        mBuffer.addPropertyBundleModifierOperation(bundleId, parentBundleId, propertyIds, valueIds);
+    }
+
+    /**
+     * Resolves literal integers or {@code 0x100000000L}-tagged variable identifiers into integer
+     * variable IDs and emits a {@code PropertyBundleModifierOperation}.
+     *
+     * @param bundleId the bundle identifier
+     * @param parentBundleId the parent bundle identifier
+     * @param propertyIds parallel array of property identifiers
+     * @param values parallel array of literal integers or {@code 0x100000000L}-tagged variable IDs
+     */
+    public void addPropertyBundleModifier(
+            int bundleId,
+            int parentBundleId,
+            int @NonNull [] propertyIds,
+            long @NonNull [] values) {
+        int count = propertyIds != null ? propertyIds.length : 0;
+        int valuesLen = values != null ? values.length : 0;
+        validatePropertyBundleArrayLengths(count, valuesLen);
+        int[] valueIds = new int[count];
+        for (int i = 0; i < count; i++) {
+            long encoded = values[i];
+            if (encoded >= 0x100000000L) {
+                valueIds[i] = (int) (encoded - 0x100000000L);
+            } else {
+                valueIds[i] = (int) (addInteger((int) encoded) - 0x100000000L);
+            }
+        }
+        mBuffer.addPropertyBundleModifierOperation(bundleId, parentBundleId, propertyIds, valueIds);
+    }
+
+    private static void validatePropertyBundleArrayLengths(int count, int valuesLen) {
+        if (count != valuesLen) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Parallel arrays must have identical lengths:\n "
+                                    + "propertyIds=%d\nvalues=%d",
+                            count, valuesLen));
+        }
+        if (count > Limits.MAX_PROPERTY_BUNDLE_ENTRIES) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Too many property bundle entries: %d > %d",
+                            count, Limits.MAX_PROPERTY_BUNDLE_ENTRIES));
+        }
+    }
+
+    /**
+     * Adds a {@code PropertyBundleLookupOperation} to the buffer.
+     *
+     * @param valueId the destination integer variable identifier
+     * @param componentId the target component identifier, or {@code -1} for the enclosing component
+     * @param propertyId the property identifier to look up
+     * @param defaultValue fallback value used when the component, bundle, or property is missing
+     */
+    public void addPropertyBundleLookupOperation(
+            int valueId, int componentId, int propertyId, int defaultValue) {
+        mBuffer.addPropertyBundleLookupOperation(valueId, componentId, propertyId, defaultValue);
+    }
+
+    /**
+     * Adds a {@code PropertyBundleLookupOperation} targeting the enclosing component to the buffer.
+     *
+     * @param valueId the destination integer variable identifier
+     * @param propertyId the property identifier to look up
+     * @param defaultValue fallback value used when the component, bundle, or property is missing
+     */
+    public void addPropertyBundleLookupOperation(
+            int valueId, int propertyId, int defaultValue) {
+        mBuffer.addPropertyBundleLookupOperation(valueId, propertyId, defaultValue);
+    }
+
+    /**
+     * Allocates an integer variable and emits a {@code PropertyBundleLookupOperation} targeting
+     * {@code componentId}.
+     *
+     * @param componentId the target component identifier, or {@code -1} for the enclosing component
+     * @param propertyId the property identifier to look up
+     * @param defaultValue fallback value used when the component, bundle, or property is missing
+     * @return id of the integer variable encoded as a {@code long} ({@code id + 0x100000000L})
+     */
+    public long addPropertyBundleLookup(int componentId, int propertyId, int defaultValue) {
+        int valueId = mState.createNextAvailableId();
+        mBuffer.addPropertyBundleLookupOperation(valueId, componentId, propertyId, defaultValue);
+        return (long) valueId + 0x100000000L;
+    }
+
+    /**
+     * Allocates an integer variable and emits a {@code PropertyBundleLookupOperation} targeting the
+     * enclosing component.
+     *
+     * @param propertyId the property identifier to look up
+     * @param defaultValue fallback value used when the component, bundle, or property is missing
+     * @return id of the integer variable encoded as a {@code long} ({@code id + 0x100000000L})
+     */
+    public long addPropertyBundleLookup(int propertyId, int defaultValue) {
+        return addPropertyBundleLookup(SELF_COMPONENT_ID, propertyId, defaultValue);
     }
 
     /**
@@ -5675,6 +5915,7 @@ public class RemoteComposeWriter {
      */
     public void startReferencedOperations(int id) {
         mBuffer.addReferencedOperations(id);
+        mState.pushDataScope();
     }
 
     /**
@@ -5682,6 +5923,7 @@ public class RemoteComposeWriter {
      */
     public void endReferencedOperations() {
         mBuffer.addContainerEnd();
+        mState.popDataScope();
     }
 
     /**

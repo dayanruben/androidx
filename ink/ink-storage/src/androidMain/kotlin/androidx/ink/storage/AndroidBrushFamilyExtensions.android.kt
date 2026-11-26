@@ -20,10 +20,8 @@ package androidx.ink.storage
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import androidx.annotation.RestrictTo
 import androidx.ink.brush.BrushFamily
 import androidx.ink.brush.ExperimentalInkBrushCompatibilityApi
-import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.TextureBitmapStore
 import androidx.ink.brush.Version
 import java.io.ByteArrayOutputStream
@@ -87,7 +85,6 @@ public fun BrushFamily.encode(output: OutputStream, textureBitmapStore: TextureB
  *   [TextureBitmapStore.getEncodedTextureId].
  * @receiver The [List] of [BrushFamily] objects to encode.
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
 @ExperimentalInkBrushCompatibilityApi
 public fun List<BrushFamily>.encodeMultiple(
     output: OutputStream,
@@ -137,7 +134,6 @@ public fun BrushFamily.Companion.decode(
  * @throws [IllegalArgumentException] [input] does not provide a valid `ink.proto.BrushFamily` proto
  *   message, or any of the corresponding [BrushFamily]s are invalid.
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
 @ExperimentalInkBrushCompatibilityApi
 public fun BrushFamily.Companion.decodeMultiple(
     input: InputStream,
@@ -147,7 +143,6 @@ public fun BrushFamily.Companion.decodeMultiple(
     decodeMultiple(input, maxVersion, getClientTextureId.toOnDecodeTexturePngBytes())
 
 /** See [decodeMultiple] above. This overload uses [Version.MAX_SUPPORTED]. */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
 @ExperimentalInkBrushCompatibilityApi
 @SuppressWarnings("ExecutorRegistration")
 public fun BrushFamily.Companion.decodeMultiple(
@@ -248,7 +243,6 @@ public object AndroidBrushFamilySerialization {
      *   [TextureBitmapStore] that always returns `null`. Texture IDs are written as returned by
      *   [TextureBitmapStore.getEncodedTextureId].
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
     @ExperimentalInkBrushCompatibilityApi
     @JvmStatic
     @Throws(IOException::class)
@@ -281,7 +275,6 @@ public object AndroidBrushFamilySerialization {
      * @throws [IllegalArgumentException] [input] does not provide a valid `ink.proto.BrushFamily`
      *   proto message, or any of the corresponding [BrushFamily]s are invalid.
      */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
     @ExperimentalInkBrushCompatibilityApi
     @SuppressWarnings("ExecutorRegistration")
     @JvmStatic
@@ -293,7 +286,6 @@ public object AndroidBrushFamilySerialization {
     ): List<BrushFamily> = BrushFamily.decodeMultiple(input, maxVersion, getClientTextureId)
 
     /** See [decodeMultiple] above. This overload uses [Version.MAX_SUPPORTED]. */
-    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
     @ExperimentalInkBrushCompatibilityApi
     @SuppressWarnings("ExecutorRegistration")
     @JvmStatic
@@ -303,7 +295,7 @@ public object AndroidBrushFamilySerialization {
     ): List<BrushFamily> = decodeMultiple(input, Version.MAX_SUPPORTED, getClientTextureId)
 }
 
-@OptIn(ExperimentalInkCustomBrushApi::class)
+@OptIn(ExperimentalInkBrushCompatibilityApi::class)
 private fun TextureBitmapStore.toTexturePngBytesLookup(): TexturePngBytesLookup =
     object : TexturePngBytesLookup {
         override fun getTexturePngBytes(clientTextureId: String): ByteArray? =

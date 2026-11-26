@@ -51,6 +51,7 @@ import androidx.compose.remote.core.Operations.DATA_SHADER
 import androidx.compose.remote.core.Operations.DATA_SOUND
 import androidx.compose.remote.core.Operations.DATA_TEXT
 import androidx.compose.remote.core.Operations.DEBUG_MESSAGE
+import androidx.compose.remote.core.Operations.DEFINE_MESH_3D
 import androidx.compose.remote.core.Operations.DRAW_ARC
 import androidx.compose.remote.core.Operations.DRAW_BITMAP
 import androidx.compose.remote.core.Operations.DRAW_BITMAP_FONT_TEXT_RUN
@@ -62,6 +63,7 @@ import androidx.compose.remote.core.Operations.DRAW_CIRCLE
 import androidx.compose.remote.core.Operations.DRAW_CONTENT
 import androidx.compose.remote.core.Operations.DRAW_LINE
 import androidx.compose.remote.core.Operations.DRAW_MESH_2D
+import androidx.compose.remote.core.Operations.DRAW_MESH_3D
 import androidx.compose.remote.core.Operations.DRAW_OVAL
 import androidx.compose.remote.core.Operations.DRAW_PATH
 import androidx.compose.remote.core.Operations.DRAW_RECT
@@ -113,6 +115,7 @@ import androidx.compose.remote.core.Operations.MACRO_CALL
 import androidx.compose.remote.core.Operations.MACRO_DEFINE
 import androidx.compose.remote.core.Operations.MACRO_FOR_EACH
 import androidx.compose.remote.core.Operations.MAP_RC_DOC_VARIABLES
+import androidx.compose.remote.core.Operations.MATRIX_3D_OP
 import androidx.compose.remote.core.Operations.MATRIX_CONSTANT
 import androidx.compose.remote.core.Operations.MATRIX_EXPRESSION
 import androidx.compose.remote.core.Operations.MATRIX_FROM_MESH_2D
@@ -124,10 +127,13 @@ import androidx.compose.remote.core.Operations.MATRIX_SCALE
 import androidx.compose.remote.core.Operations.MATRIX_SKEW
 import androidx.compose.remote.core.Operations.MATRIX_TRANSLATE
 import androidx.compose.remote.core.Operations.MATRIX_VECTOR_MATH
+import androidx.compose.remote.core.Operations.MESH_EXPRESSION_3D
+import androidx.compose.remote.core.Operations.MESH_PRIMITIVE_3D
 import androidx.compose.remote.core.Operations.MODIFIER_ALIGN_BY
 import androidx.compose.remote.core.Operations.MODIFIER_BACKGROUND
 import androidx.compose.remote.core.Operations.MODIFIER_BORDER
 import androidx.compose.remote.core.Operations.MODIFIER_CLICK
+import androidx.compose.remote.core.Operations.MODIFIER_CLIP_PATH
 import androidx.compose.remote.core.Operations.MODIFIER_CLIP_RECT
 import androidx.compose.remote.core.Operations.MODIFIER_COLLAPSIBLE_PRIORITY
 import androidx.compose.remote.core.Operations.MODIFIER_DIMENSION_CONSTRAINTS
@@ -140,6 +146,7 @@ import androidx.compose.remote.core.Operations.MODIFIER_MARQUEE
 import androidx.compose.remote.core.Operations.MODIFIER_MULTI_CLICK
 import androidx.compose.remote.core.Operations.MODIFIER_OFFSET
 import androidx.compose.remote.core.Operations.MODIFIER_PADDING
+import androidx.compose.remote.core.Operations.MODIFIER_PROPERTY_BUNDLE
 import androidx.compose.remote.core.Operations.MODIFIER_RIPPLE
 import androidx.compose.remote.core.Operations.MODIFIER_ROUNDED_CLIP_RECT
 import androidx.compose.remote.core.Operations.MODIFIER_SCROLL
@@ -151,6 +158,7 @@ import androidx.compose.remote.core.Operations.MODIFIER_WIDTH
 import androidx.compose.remote.core.Operations.MODIFIER_WIDTH_IN
 import androidx.compose.remote.core.Operations.MODIFIER_ZINDEX
 import androidx.compose.remote.core.Operations.NAMED_VARIABLE
+import androidx.compose.remote.core.Operations.PAINT_3D_STATE
 import androidx.compose.remote.core.Operations.PAINT_VALUES
 import androidx.compose.remote.core.Operations.PARTICLE_COMPARE
 import androidx.compose.remote.core.Operations.PARTICLE_DEFINE
@@ -161,11 +169,15 @@ import androidx.compose.remote.core.Operations.PATH_CREATE
 import androidx.compose.remote.core.Operations.PATH_EXPRESSION
 import androidx.compose.remote.core.Operations.PATH_TWEEN
 import androidx.compose.remote.core.Operations.PLAY_SOUND
+import androidx.compose.remote.core.Operations.PROPERTY_BUNDLE_LOOKUP
 import androidx.compose.remote.core.Operations.REFERENCED_OPERATIONS
 import androidx.compose.remote.core.Operations.REM
 import androidx.compose.remote.core.Operations.ROOT_CONTENT_BEHAVIOR
 import androidx.compose.remote.core.Operations.ROOT_CONTENT_DESCRIPTION
 import androidx.compose.remote.core.Operations.RUN_ACTION
+import androidx.compose.remote.core.Operations.SET_CAMERA_3D
+import androidx.compose.remote.core.Operations.SET_LIGHTS_3D
+import androidx.compose.remote.core.Operations.SET_TEXTURE_3D
 import androidx.compose.remote.core.Operations.SKIP
 import androidx.compose.remote.core.Operations.SOUND_EXPRESSION
 import androidx.compose.remote.core.Operations.TEXT_FROM_FLOAT
@@ -185,6 +197,7 @@ import androidx.compose.remote.core.Operations.VALUE_FLOAT_EXPRESSION_CHANGE_ACT
 import androidx.compose.remote.core.Operations.VALUE_INTEGER_CHANGE_ACTION
 import androidx.compose.remote.core.Operations.VALUE_INTEGER_EXPRESSION_CHANGE_ACTION
 import androidx.compose.remote.core.Operations.VALUE_STRING_CHANGE_ACTION
+import androidx.compose.remote.core.Operations.VECTOR_EXPRESSION
 import androidx.compose.remote.core.Operations.WAKE_IN
 import androidx.compose.remote.core.RcProfiles.PROFILE_ANDROIDX
 import androidx.compose.remote.core.RcProfiles.PROFILE_ANDROID_NATIVE
@@ -290,7 +303,17 @@ import androidx.compose.remote.core.operations.Theme
 import androidx.compose.remote.core.operations.TimeAttribute
 import androidx.compose.remote.core.operations.TouchExpression
 import androidx.compose.remote.core.operations.UpdateDynamicFloatList
+import androidx.compose.remote.core.operations.VectorExpression
 import androidx.compose.remote.core.operations.WakeIn
+import androidx.compose.remote.core.operations.d3.DefineMesh3D
+import androidx.compose.remote.core.operations.d3.DrawMesh3D
+import androidx.compose.remote.core.operations.d3.Matrix3DOp
+import androidx.compose.remote.core.operations.d3.MeshExpression3D
+import androidx.compose.remote.core.operations.d3.MeshPrimitive
+import androidx.compose.remote.core.operations.d3.Paint3DState
+import androidx.compose.remote.core.operations.d3.SetCamera3D
+import androidx.compose.remote.core.operations.d3.SetLights3D
+import androidx.compose.remote.core.operations.d3.SetTexture3D
 import androidx.compose.remote.core.operations.layout.CanvasContent
 import androidx.compose.remote.core.operations.layout.CanvasOperations
 import androidx.compose.remote.core.operations.layout.ClickModifierOperation
@@ -301,6 +324,8 @@ import androidx.compose.remote.core.operations.layout.ImpulseProcess
 import androidx.compose.remote.core.operations.layout.LayoutComponentContent
 import androidx.compose.remote.core.operations.layout.LoopOperation
 import androidx.compose.remote.core.operations.layout.MultiClickModifier
+import androidx.compose.remote.core.operations.layout.PropertyBundleLookupOperation
+import androidx.compose.remote.core.operations.layout.PropertyBundleModifierOperation
 import androidx.compose.remote.core.operations.layout.RootLayoutComponent
 import androidx.compose.remote.core.operations.layout.TouchCancelModifierOperation
 import androidx.compose.remote.core.operations.layout.TouchDownModifierOperation
@@ -325,6 +350,7 @@ import androidx.compose.remote.core.operations.layout.managers.TextStyle
 import androidx.compose.remote.core.operations.layout.modifiers.AlignByModifierOperation
 import androidx.compose.remote.core.operations.layout.modifiers.BackgroundModifierOperation
 import androidx.compose.remote.core.operations.layout.modifiers.BorderModifierOperation
+import androidx.compose.remote.core.operations.layout.modifiers.ClipPathModifierOperation
 import androidx.compose.remote.core.operations.layout.modifiers.ClipRectModifierOperation
 import androidx.compose.remote.core.operations.layout.modifiers.CollapsiblePriorityModifierOperation
 import androidx.compose.remote.core.operations.layout.modifiers.ComponentVisibilityOperation
@@ -988,7 +1014,10 @@ class OperationsProfilesTest {
                     DATA_FLOAT to FloatConstant::class.java,
                     ANIMATED_FLOAT to FloatExpression::class.java,
                     MODIFIER_MULTI_CLICK to MultiClickModifier::class.java,
+                    MODIFIER_CLIP_PATH to ClipPathModifierOperation::class.java,
                     LAYOUT_CUSTOM to Custom::class.java,
+                    MODIFIER_PROPERTY_BUNDLE to PropertyBundleModifierOperation::class.java,
+                    PROPERTY_BUNDLE_LOOKUP to PropertyBundleLookupOperation::class.java,
                     MODIFIER_EVENT_HANDLER to EventHandlerModifierOperation::class.java,
                     LAYOUT_TEXT_INPUT to TextInputLayout::class.java,
                     DATA_BITMAP to BitmapData::class.java,
@@ -1000,6 +1029,16 @@ class OperationsProfilesTest {
                     LAYOUT_RC_DOC to RcDocLayout::class.java,
                     MAP_RC_DOC_VARIABLES to MapRcDocVariables::class.java,
                     BINARY_DATA to BinaryData::class.java,
+                    DEFINE_MESH_3D to DefineMesh3D::class.java,
+                    SET_CAMERA_3D to SetCamera3D::class.java,
+                    MATRIX_3D_OP to Matrix3DOp::class.java,
+                    DRAW_MESH_3D to DrawMesh3D::class.java,
+                    PAINT_3D_STATE to Paint3DState::class.java,
+                    SET_LIGHTS_3D to SetLights3D::class.java,
+                    VECTOR_EXPRESSION to VectorExpression::class.java,
+                    MESH_EXPRESSION_3D to MeshExpression3D::class.java,
+                    SET_TEXTURE_3D to SetTexture3D::class.java,
+                    MESH_PRIMITIVE_3D to MeshPrimitive::class.java,
                     MODIFIER_BORDER to BorderModifierOperation::class.java,
                     MODIFIER_CLIP_RECT to ClipRectModifierOperation::class.java,
                     DATA_PATH to PathData::class.java,
@@ -1330,7 +1369,10 @@ class OperationsProfilesTest {
                     DATA_FLOAT to FloatConstant::class.java,
                     ANIMATED_FLOAT to FloatExpression::class.java,
                     MODIFIER_MULTI_CLICK to MultiClickModifier::class.java,
+                    MODIFIER_CLIP_PATH to ClipPathModifierOperation::class.java,
                     LAYOUT_CUSTOM to Custom::class.java,
+                    MODIFIER_PROPERTY_BUNDLE to PropertyBundleModifierOperation::class.java,
+                    PROPERTY_BUNDLE_LOOKUP to PropertyBundleLookupOperation::class.java,
                     MODIFIER_EVENT_HANDLER to EventHandlerModifierOperation::class.java,
                     LAYOUT_TEXT_INPUT to TextInputLayout::class.java,
                     DATA_BITMAP to BitmapData::class.java,
@@ -1342,6 +1384,16 @@ class OperationsProfilesTest {
                     LAYOUT_RC_DOC to RcDocLayout::class.java,
                     MAP_RC_DOC_VARIABLES to MapRcDocVariables::class.java,
                     BINARY_DATA to BinaryData::class.java,
+                    DEFINE_MESH_3D to DefineMesh3D::class.java,
+                    SET_CAMERA_3D to SetCamera3D::class.java,
+                    MATRIX_3D_OP to Matrix3DOp::class.java,
+                    DRAW_MESH_3D to DrawMesh3D::class.java,
+                    PAINT_3D_STATE to Paint3DState::class.java,
+                    SET_LIGHTS_3D to SetLights3D::class.java,
+                    VECTOR_EXPRESSION to VectorExpression::class.java,
+                    MESH_EXPRESSION_3D to MeshExpression3D::class.java,
+                    SET_TEXTURE_3D to SetTexture3D::class.java,
+                    MESH_PRIMITIVE_3D to MeshPrimitive::class.java,
                     MODIFIER_BORDER to BorderModifierOperation::class.java,
                     MODIFIER_CLIP_RECT to ClipRectModifierOperation::class.java,
                     DATA_PATH to PathData::class.java,
@@ -1667,6 +1719,7 @@ class OperationsProfilesTest {
                     DATA_FLOAT to FloatConstant::class.java,
                     ANIMATED_FLOAT to FloatExpression::class.java,
                     MODIFIER_MULTI_CLICK to MultiClickModifier::class.java,
+                    MODIFIER_CLIP_PATH to ClipPathModifierOperation::class.java,
                     DATA_BITMAP to BitmapData::class.java,
                     DATA_TEXT to TextData::class.java,
                     ROOT_CONTENT_DESCRIPTION to RootContentDescription::class.java,
@@ -1676,6 +1729,16 @@ class OperationsProfilesTest {
                     LAYOUT_RC_DOC to RcDocLayout::class.java,
                     MAP_RC_DOC_VARIABLES to MapRcDocVariables::class.java,
                     BINARY_DATA to BinaryData::class.java,
+                    DEFINE_MESH_3D to DefineMesh3D::class.java,
+                    SET_CAMERA_3D to SetCamera3D::class.java,
+                    MATRIX_3D_OP to Matrix3DOp::class.java,
+                    DRAW_MESH_3D to DrawMesh3D::class.java,
+                    PAINT_3D_STATE to Paint3DState::class.java,
+                    SET_LIGHTS_3D to SetLights3D::class.java,
+                    VECTOR_EXPRESSION to VectorExpression::class.java,
+                    MESH_EXPRESSION_3D to MeshExpression3D::class.java,
+                    SET_TEXTURE_3D to SetTexture3D::class.java,
+                    MESH_PRIMITIVE_3D to MeshPrimitive::class.java,
                     MODIFIER_BORDER to BorderModifierOperation::class.java,
                     MODIFIER_CLIP_RECT to ClipRectModifierOperation::class.java,
                     DATA_PATH to PathData::class.java,
@@ -2002,6 +2065,7 @@ class OperationsProfilesTest {
                     DATA_FLOAT to FloatConstant::class.java,
                     ANIMATED_FLOAT to FloatExpression::class.java,
                     MODIFIER_MULTI_CLICK to MultiClickModifier::class.java,
+                    MODIFIER_CLIP_PATH to ClipPathModifierOperation::class.java,
                     DATA_BITMAP to BitmapData::class.java,
                     DATA_TEXT to TextData::class.java,
                     ROOT_CONTENT_DESCRIPTION to RootContentDescription::class.java,
@@ -2011,6 +2075,16 @@ class OperationsProfilesTest {
                     LAYOUT_RC_DOC to RcDocLayout::class.java,
                     MAP_RC_DOC_VARIABLES to MapRcDocVariables::class.java,
                     BINARY_DATA to BinaryData::class.java,
+                    DEFINE_MESH_3D to DefineMesh3D::class.java,
+                    SET_CAMERA_3D to SetCamera3D::class.java,
+                    MATRIX_3D_OP to Matrix3DOp::class.java,
+                    DRAW_MESH_3D to DrawMesh3D::class.java,
+                    PAINT_3D_STATE to Paint3DState::class.java,
+                    SET_LIGHTS_3D to SetLights3D::class.java,
+                    VECTOR_EXPRESSION to VectorExpression::class.java,
+                    MESH_EXPRESSION_3D to MeshExpression3D::class.java,
+                    SET_TEXTURE_3D to SetTexture3D::class.java,
+                    MESH_PRIMITIVE_3D to MeshPrimitive::class.java,
                     MODIFIER_BORDER to BorderModifierOperation::class.java,
                     MODIFIER_CLIP_RECT to ClipRectModifierOperation::class.java,
                     DATA_PATH to PathData::class.java,
@@ -2335,6 +2409,7 @@ class OperationsProfilesTest {
                     DATA_FLOAT to FloatConstant::class.java,
                     ANIMATED_FLOAT to FloatExpression::class.java,
                     MODIFIER_MULTI_CLICK to MultiClickModifier::class.java,
+                    MODIFIER_CLIP_PATH to ClipPathModifierOperation::class.java,
                     DATA_BITMAP to BitmapData::class.java,
                     DATA_TEXT to TextData::class.java,
                     ROOT_CONTENT_DESCRIPTION to RootContentDescription::class.java,
@@ -2344,6 +2419,16 @@ class OperationsProfilesTest {
                     LAYOUT_RC_DOC to RcDocLayout::class.java,
                     MAP_RC_DOC_VARIABLES to MapRcDocVariables::class.java,
                     BINARY_DATA to BinaryData::class.java,
+                    DEFINE_MESH_3D to DefineMesh3D::class.java,
+                    SET_CAMERA_3D to SetCamera3D::class.java,
+                    MATRIX_3D_OP to Matrix3DOp::class.java,
+                    DRAW_MESH_3D to DrawMesh3D::class.java,
+                    PAINT_3D_STATE to Paint3DState::class.java,
+                    SET_LIGHTS_3D to SetLights3D::class.java,
+                    VECTOR_EXPRESSION to VectorExpression::class.java,
+                    MESH_EXPRESSION_3D to MeshExpression3D::class.java,
+                    SET_TEXTURE_3D to SetTexture3D::class.java,
+                    MESH_PRIMITIVE_3D to MeshPrimitive::class.java,
                     MODIFIER_BORDER to BorderModifierOperation::class.java,
                     MODIFIER_CLIP_RECT to ClipRectModifierOperation::class.java,
                     DATA_PATH to PathData::class.java,
@@ -2678,6 +2763,7 @@ class OperationsProfilesTest {
                     DATA_FLOAT to FloatConstant::class.java,
                     ANIMATED_FLOAT to FloatExpression::class.java,
                     MODIFIER_MULTI_CLICK to MultiClickModifier::class.java,
+                    MODIFIER_CLIP_PATH to ClipPathModifierOperation::class.java,
                     DATA_BITMAP to BitmapData::class.java,
                     DATA_TEXT to TextData::class.java,
                     ROOT_CONTENT_DESCRIPTION to RootContentDescription::class.java,
@@ -2687,6 +2773,16 @@ class OperationsProfilesTest {
                     LAYOUT_RC_DOC to RcDocLayout::class.java,
                     MAP_RC_DOC_VARIABLES to MapRcDocVariables::class.java,
                     BINARY_DATA to BinaryData::class.java,
+                    DEFINE_MESH_3D to DefineMesh3D::class.java,
+                    SET_CAMERA_3D to SetCamera3D::class.java,
+                    MATRIX_3D_OP to Matrix3DOp::class.java,
+                    DRAW_MESH_3D to DrawMesh3D::class.java,
+                    PAINT_3D_STATE to Paint3DState::class.java,
+                    SET_LIGHTS_3D to SetLights3D::class.java,
+                    VECTOR_EXPRESSION to VectorExpression::class.java,
+                    MESH_EXPRESSION_3D to MeshExpression3D::class.java,
+                    SET_TEXTURE_3D to SetTexture3D::class.java,
+                    MESH_PRIMITIVE_3D to MeshPrimitive::class.java,
                     MODIFIER_BORDER to BorderModifierOperation::class.java,
                     MODIFIER_CLIP_RECT to ClipRectModifierOperation::class.java,
                     DATA_PATH to PathData::class.java,

@@ -39,6 +39,7 @@ import androidx.glance.adaptive.core.slots.IconGrid
 import androidx.glance.adaptive.core.slots.IconTile
 import androidx.glance.adaptive.core.slots.ItemList
 import androidx.glance.adaptive.core.slots.LeadingComponent
+import androidx.glance.adaptive.core.slots.ListItem
 import androidx.glance.adaptive.core.slots.PrimaryComponent
 import androidx.glance.adaptive.core.slots.SecondaryComponent
 import androidx.glance.adaptive.core.slots.TemplateText
@@ -129,6 +130,24 @@ internal object MatrixDefaults {
      */
     val TrailingExtraWidth: Dp = 8.dp
 
+    /** Glyph size of an uncontained trailing icon button (e.g. a bare `refresh` icon). */
+    val UncontainedTrailingGlyphSize: Dp = 24.dp
+
+    /**
+     * Touch-target width of an uncontained trailing icon button, centering the 24 dp glyph with 8
+     * dp horizontal padding on each side.
+     */
+    val UncontainedTrailingWidth: Dp = 40.dp
+
+    /**
+     * Touch-target height of an uncontained trailing icon button: 40 dp for standard row headers
+     * (which already enforce [HeaderRowMinHeight]) and compact headers at `H2+`, shrinking to the
+     * 24 dp glyph height only in compact `H0`/`H1` headers.
+     */
+    fun uncontainedTrailingHeight(tiers: SizeTiers, compactHeader: Boolean = false): Dp =
+        if (compactHeader && tiers.height <= HeightTier.H1) UncontainedTrailingGlyphSize
+        else UncontainedTrailingWidth
+
     /** Least height of a header in a row, which the backends declare in its layout. */
     val HeaderRowMinHeight: Dp = 56.dp
 
@@ -168,9 +187,9 @@ public sealed interface MatrixContent {
  * the actions after it do not move. With no action at all, the row is hidden.
  *
  * A compact card, such as the design's `Linear` strip on the lock screen, is a header-only card
- * with no padding and a smaller [leadingSize] and [primaryTextSize]. A card that sets [leadingSize]
- * lays its header out as a label, with the secondary text under the primary one (see
- * [ResolvedMatrixCard.compactHeader]).
+ * with no padding and a smaller [leadingSize] and [primaryTextSize]. A card that sets
+ * [compactHeader] (or [leadingSize]) lays its header out as a label, with the secondary text under
+ * the primary one (see [ResolvedMatrixCard.compactHeader]).
  *
  * @property leading Component for the leading slot, or `null` to hide it with the gap after it.
  * @property primary Component for the primary slot, or `null` to leave it empty.
@@ -188,8 +207,13 @@ public sealed interface MatrixContent {
  *   [MatrixDefaults.LeadingSize]. A stacked header still shrinks it to fit its column.
  * @property primaryTextSize Type size of the primary text, or `null` for
  *   [MatrixDefaults.primaryTextSize].
- * @throws IllegalArgumentException if [leadingSize] is negative or [primaryTextSize] is not
- *   positive.
+ * @property compactHeader Whether to lay out the header as a compact label (no minimum height of
+ *   its own; secondary text stacked under primary in a row). Defaults to `leadingSize != null`.
+ * @property headerHorizontalPadding Extra horizontal inset applied to a row header (for example, to
+ *   align a text-only header with inset list items beneath it).
+ * @throws IllegalArgumentException if [leadingSize] or [headerHorizontalPadding] is negative,
+ *   [primaryTextSize] is not positive, or [compactHeader] is `false` while [leadingSize] is
+ *   non-null.
  */
 internal class MatrixCardContent(
     val leading: LeadingComponent? = null,
@@ -203,6 +227,8 @@ internal class MatrixCardContent(
     val cornerRadius: Dp? = null,
     val leadingSize: Dp? = null,
     val primaryTextSize: TextUnit? = null,
+    val compactHeader: Boolean = leadingSize != null,
+    val headerHorizontalPadding: Dp = 0.dp,
     override val hasDroppedSlots: Boolean = false,
 ) : MatrixContent {
     init {
@@ -211,6 +237,12 @@ internal class MatrixCardContent(
         }
         require(primaryTextSize == null || primaryTextSize.value > 0f) {
             "Primary text size must be positive, was $primaryTextSize."
+        }
+        require(headerHorizontalPadding.value >= 0f) {
+            "Header horizontal padding must not be negative, was $headerHorizontalPadding."
+        }
+        require(compactHeader || leadingSize == null) {
+            "A card with an explicit leadingSize must use compactHeader."
         }
     }
 
@@ -242,10 +274,10 @@ internal class MatrixBulbContent(
  * @property stacked Whether the header slots run down rather than across.
  * @property leading Component in the leading slot, or `null`.
  * @property leadingSize Edge length the leading component is drawn at.
- * @property compactHeader Whether the header is laid out as a label rather than a headline, because
- *   the card sizes its leading component itself, as a compact card does: the header has no minimum
- *   height of its own, so it is as tall as its tallest slot, and in a row the secondary text runs
- *   under the primary one rather than beside it.
+ * @property compactHeader Whether the header is laid out as a label rather than a headline (see
+ *   [MatrixCardContent.compactHeader]): the header has no minimum height of its own, so it is as
+ *   tall as its tallest slot, and in a row the secondary text runs under the primary one rather
+ *   than beside it.
  * @property primary Component in the primary slot, already fitted to its width budget, or `null`
  *   when empty.
  * @property primaryTextSize Type size of [primary].
@@ -253,12 +285,14 @@ internal class MatrixBulbContent(
  * @property secondaryMaxWidth Widest [secondary] may be drawn before it is ellipsized, or `null`
  *   when it has the whole content width to itself.
  * @property trailing Component in the header's trailing slot, or `null` when hidden.
- * @property trailingSize Edge length [trailing] is drawn at, the leading component's.
+ * @property trailingSize Edge length [trailing] is drawn at: [MatrixDefaults.LeadingSize] when
+ *   contained, or [MatrixDefaults.uncontainedTrailingHeight] when uncontained.
  * @property hero Component in the hero slot, or `null` when hidden.
  * @property heroHeight Height the hero is drawn in, estimated from the container and the slots
  *   around it, for a hero that lays itself out by it, such as an icon grid capping its rows; `null`
  *   when there is no hero or the container has no size.
  * @property actions The action positions of the bottom row; empty when hidden.
+ * @property headerHorizontalPadding Extra horizontal inset applied to a row header.
  */
 internal class ResolvedMatrixCard(
     val tiers: SizeTiers,
@@ -278,6 +312,7 @@ internal class ResolvedMatrixCard(
     val hero: HeroComponent?,
     val heroHeight: Dp?,
     val actions: List<ActionComponent?>,
+    val headerHorizontalPadding: Dp = 0.dp,
 )
 
 /**
@@ -296,8 +331,10 @@ internal class ResolvedMatrixBulb(val component: BulbComponent, val containerSiz
  * it gives up padding first (down to 8 dp) and only then shrinks the leading component. In a row,
  * the primary text gets what the leading component, the secondary text and the gaps leave, and is
  * shortened to fit it; the secondary text takes at most 40% of the row, and is ellipsized past it.
- * A trailing component takes the leading component's size from the row; a stacked header drops it.
- * On the lock screen, sensitive text is replaced first.
+ * A contained trailing component takes [MatrixDefaults.LeadingSize] plus
+ * [MatrixDefaults.TrailingExtraWidth] from the row, while an uncontained trailing button takes
+ * [MatrixDefaults.UncontainedTrailingWidth]; a stacked header drops it. On the lock screen,
+ * sensitive text is replaced first.
  *
  * @param content The components to lay out.
  * @param surface The target surface, carrying the container size as
@@ -340,27 +377,36 @@ internal fun resolve(
 
     val secondary = content.secondary?.shownOn(locked)
     // A compact header runs the secondary text under the primary one rather than beside it.
-    val compactHeader = content.leadingSize != null
+    val compactHeader = content.compactHeader
+    val headerHorizontalPadding = if (stacked) 0.dp else content.headerHorizontalPadding
+    val rowHeaderWidthDp = (contentWidthDp - 2 * headerHorizontalPadding.value).coerceAtLeast(0f)
     val secondaryBeside = !stacked && !compactHeader
     // A stacked secondary text has a line to itself, and an unsized container has no width to
     // share.
     val secondaryBesideMaxWidthDp =
         if (secondaryBeside && secondary != null && widthDp > 0f) {
-            (contentWidthDp * MATRIX_SECONDARY_MAX_WIDTH_FRACTION).coerceAtLeast(0f)
+            (rowHeaderWidthDp * MATRIX_SECONDARY_MAX_WIDTH_FRACTION).coerceAtLeast(0f)
         } else {
             null
         }
     val primaryTextSize = content.primaryTextSize ?: MatrixDefaults.primaryTextSize(tiers)
     // A stacked header has no room beside its slots for a trailing component.
     val trailing = content.trailing?.takeUnless { stacked }?.shownOn(locked)
-    var primaryMaxWidthDp = contentWidthDp
+    val uncontainedTrailing = (trailing as? IconButton)?.contained == false
+    var primaryMaxWidthDp = if (stacked) contentWidthDp else rowHeaderWidthDp
     if (!stacked) {
         if (leading != null) primaryMaxWidthDp -= leadingSizeDp + MatrixDefaults.HeaderSpacing.value
-        if (trailing != null)
+        if (trailing != null) {
             primaryMaxWidthDp -=
-                leadingDefaultDp +
-                    MatrixDefaults.TrailingExtraWidth.value +
-                    MatrixDefaults.HeaderSpacing.value
+                if (uncontainedTrailing) {
+                    MatrixDefaults.UncontainedTrailingWidth.value +
+                        MatrixDefaults.HeaderSpacing.value
+                } else {
+                    MatrixDefaults.LeadingSize.value +
+                        MatrixDefaults.TrailingExtraWidth.value +
+                        MatrixDefaults.HeaderSpacing.value
+                }
+        }
         secondary
             ?.takeIf { secondaryBeside }
             ?.let {
@@ -381,6 +427,13 @@ internal fun resolve(
 
     val actions = List(content.actions.size) { i -> content.actions[i]?.shownOn(locked) }
     val heightDp = dimensions.heightDp.toFloat()
+    val resolvedTrailingSizeDp =
+        when {
+            trailing == null -> 0f
+            uncontainedTrailing ->
+                MatrixDefaults.uncontainedTrailingHeight(tiers, compactHeader).value
+            else -> MatrixDefaults.LeadingSize.value
+        }
     val heroHeightDp =
         if (content.hero != null && heightDp > 0f) {
             var available = heightDp - 2 * paddingDp
@@ -393,7 +446,7 @@ internal fun resolve(
                             stacked = stacked,
                             compact = compactHeader,
                             leadingSizeDp = if (leading != null) leadingSizeDp else 0f,
-                            trailingSizeDp = if (trailing != null) leadingDefaultDp else 0f,
+                            trailingSizeDp = resolvedTrailingSizeDp,
                             primaryTextSizeSp =
                                 if (content.primary != null) primaryTextSize.value else 0f,
                             hasSecondary = secondary != null,
@@ -422,10 +475,11 @@ internal fun resolve(
         secondary = secondary,
         secondaryMaxWidth = secondaryMaxWidthDp?.dp,
         trailing = trailing,
-        trailingSize = if (trailing != null) leadingDefaultDp.dp else 0.dp,
+        trailingSize = resolvedTrailingSizeDp.dp,
         hero = content.hero?.shownOn(locked),
         heroHeight = heroHeightDp?.dp,
         actions = actions,
+        headerHorizontalPadding = headerHorizontalPadding,
     )
 }
 
@@ -470,15 +524,14 @@ private fun HeroComponent.shownOn(locked: Boolean): HeroComponent =
     when (this) {
         is Graph -> this
         is IconGrid -> redactedIf(locked)
-        // Redacted in ItemList plumbing follow-up (b/586433578).
-        is ItemList -> this
+        is ItemList -> redactedIf(locked)
     }
 
-/** This text, or its sensitive replacement when [locked]. */
+/** This text, or its sensitive replacement (without strikethrough) when [locked]. */
 private fun TemplateText.redactedIf(locked: Boolean): TemplateText {
     val replacement = sensitiveReplacement
     return if (locked && replacement != null) {
-        TemplateText(replacement, isStruckThrough = isStruckThrough)
+        TemplateText(replacement)
     } else {
         this
     }
@@ -514,6 +567,121 @@ private fun IconTile.redacted(): IconTile {
     if (sensitiveReplacement == null && shownSubtitle === subtitle) return this
     return IconTile(icon, sensitiveReplacement ?: label, action, subtitle = shownSubtitle)
 }
+
+/** This list, with every sensitive item field replaced when [locked]. */
+private fun ItemList.redactedIf(locked: Boolean): ItemList {
+    if (!locked) return this
+    var redactedItems: MutableList<ListItem>? = null
+    for (i in items.indices) {
+        val item = items[i]
+        val shown = item.redacted()
+        if (shown !== item) {
+            if (redactedItems == null) {
+                redactedItems = ArrayList(items.size)
+                for (j in 0 until i) {
+                    redactedItems.add(items[j])
+                }
+            }
+            redactedItems.add(shown)
+        } else {
+            redactedItems?.add(item)
+        }
+    }
+    return if (redactedItems != null) {
+        ItemList(
+            items = redactedItems,
+            isScrollable = isScrollable,
+            showTertiaryText = showTertiaryText,
+            layoutMode = layoutMode,
+        )
+    } else {
+        this
+    }
+}
+
+private fun TemplateText.withoutStrikethrough(): TemplateText =
+    if (isStruckThrough) TemplateText(value, sensitiveReplacement = sensitiveReplacement) else this
+
+private fun ListItem.redacted(): ListItem =
+    when (this) {
+        is ListItem.Compact -> {
+            val shownTitle = title.redactedIf(locked = true)
+            val shownSubtitle = subtitle?.redactedIf(locked = true)
+            val shownTertiary = tertiaryText?.redactedIf(locked = true)
+            if (
+                shownTitle === title && shownSubtitle === subtitle && shownTertiary === tertiaryText
+            ) {
+                this
+            } else {
+                // Drop strikethrough across the redacted row so item-level strikethrough on an
+                // unredacted sibling field (e.g. a non-sensitive time range) doesn't leak
+                // declined/completed state.
+                ListItem.Compact(
+                    title = shownTitle.withoutStrikethrough(),
+                    subtitle = shownSubtitle?.withoutStrikethrough(),
+                    tertiaryText = shownTertiary?.withoutStrikethrough(),
+                    tertiaryIcon = tertiaryIcon,
+                    leadingIcon = leadingIcon,
+                    trailingIcon = trailingIcon,
+                    trailingChip = trailingChip,
+                    action = action,
+                    style = style,
+                )
+            }
+        }
+        is ListItem.Checkbox -> {
+            val shownTitle = title.redactedIf(locked = true)
+            // Reset isChecked when redacted so completion state isn't leaked via icon/TalkBack or
+            // left visually inconsistent with the non-struck replacement text.
+            if (shownTitle === title) {
+                this
+            } else {
+                ListItem.Checkbox(shownTitle, isChecked = false, action = action)
+            }
+        }
+        is ListItem.DetailCard -> {
+            val shownTitle = title.redactedIf(locked = true)
+            val shownBody = body?.redactedIf(locked = true)
+            var redactedChecklist: MutableList<ListItem.DetailCard.ChecklistEntry>? = null
+            for (i in checklistItems.indices) {
+                val entry = checklistItems[i]
+                val shownText = entry.text.redactedIf(locked = true)
+                if (shownText !== entry.text) {
+                    if (redactedChecklist == null) {
+                        redactedChecklist = ArrayList(checklistItems.size)
+                        for (j in 0 until i) {
+                            redactedChecklist.add(checklistItems[j])
+                        }
+                    }
+                    // Reset isChecked when redacted so completion state isn't leaked or left
+                    // inconsistent with the non-struck replacement text.
+                    redactedChecklist.add(
+                        ListItem.DetailCard.ChecklistEntry(shownText, isChecked = false)
+                    )
+                } else {
+                    redactedChecklist?.add(entry)
+                }
+            }
+            if (shownTitle === title && shownBody === body && redactedChecklist == null) {
+                this
+            } else {
+                ListItem.DetailCard(
+                    title = shownTitle,
+                    body = shownBody,
+                    checklistItems = redactedChecklist ?: checklistItems,
+                    action = action,
+                    style = style,
+                )
+            }
+        }
+        is ListItem.Divider -> {
+            val shownTitle = title.redactedIf(locked = true)
+            if (shownTitle === title) this else ListItem.Divider(shownTitle)
+        }
+        // ListItem is not sealed, so new item types can be added without breaking callers; this
+        // is only reachable if one is added without being handled here.
+        else -> error("Unsupported ListItem type: ${this::class.java.name}")
+    }
 
 /** Height of a line of text [sizeSp] large, in DP, at [fontScale]. */
 private fun lineHeightDp(sizeSp: Float, fontScale: Float): Float =

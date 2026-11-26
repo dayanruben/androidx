@@ -18,11 +18,9 @@
 
 package androidx.ink.storage
 
-import androidx.annotation.RestrictTo
 import androidx.ink.brush.BrushFamily
 import androidx.ink.brush.ExperimentalInkBrushCompatibilityApi
 import androidx.ink.brush.ExperimentalInkCrossPlatformRenderingApi
-import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.TextureImageStore
 import androidx.ink.brush.Version
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -101,7 +99,6 @@ public fun BrushFamily.encode(textureImageStore: TextureImageStore): ByteArray =
  * @throws [IllegalStateException] If a [UIImage] is returned from the [TextureImageStore] but it
  *   cannot be encoded to PNG.
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
 @ExperimentalInkBrushCompatibilityApi
 @ExperimentalInkCrossPlatformRenderingApi
 public fun List<BrushFamily>.encodeMultiple(textureImageStore: TextureImageStore): ByteArray =
@@ -153,7 +150,6 @@ public fun BrushFamily.Companion.decode(
  *   message, or any of the corresponding [BrushFamily]s are invalid.
  * @throws [IOException] if gzip-format bytes cannot be read from [input].
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
 @ExperimentalInkBrushCompatibilityApi
 @ExperimentalInkCrossPlatformRenderingApi
 public fun BrushFamily.Companion.decodeMultiple(
@@ -164,7 +160,6 @@ public fun BrushFamily.Companion.decodeMultiple(
     decodeMultiple(input, maxVersion, onDecodeTexture.toOnDecodeTexturePngBytes())
 
 /** See [decodeMultiple] above. This overload uses [Version.MAX_SUPPORTED]. */
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP) // FutureJetpackApi
 @ExperimentalInkBrushCompatibilityApi
 @ExperimentalInkCrossPlatformRenderingApi
 public fun BrushFamily.Companion.decodeMultiple(
@@ -177,7 +172,7 @@ public fun BrushFamily.Companion.decodeMultiple(
         onDecodeTexture.toOnDecodeTexturePngBytes(),
     )
 
-@OptIn(ExperimentalInkCustomBrushApi::class)
+@OptIn(ExperimentalInkBrushCompatibilityApi::class)
 private fun TextureImageStore.toTexturePngBytesLookup(): TexturePngBytesLookup =
     object : TexturePngBytesLookup {
         override fun getTexturePngBytes(clientTextureId: String): ByteArray? =
