@@ -17,6 +17,7 @@
 package androidx.compose.remote.document
 
 import androidx.compose.remote.core.Operations
+import androidx.compose.remote.core.PaintOperation
 import androidx.compose.remote.core.RcProfiles as CoreRcProfiles
 import androidx.compose.remote.core.RemoteComposeBuffer
 import androidx.compose.remote.core.RemoteComposeState
@@ -43,6 +44,7 @@ import androidx.compose.remote.core.operations.utilities.AnimatedFloatExpression
 import androidx.compose.remote.core.operations.utilities.ImageScaling
 import androidx.compose.remote.core.operations.utilities.IntegerExpressionEvaluator
 import androidx.compose.remote.core.operations.utilities.NanMap
+import androidx.compose.remote.core.operations.utilities.StringUtils
 import androidx.compose.remote.core.operations.utilities.easing.CubicEasing
 import androidx.compose.remote.core.operations.utilities.easing.Easing
 import androidx.compose.remote.core.operations.utilities.easing.FloatAnimation
@@ -262,6 +264,7 @@ class RemoteProtocolParityTest {
 
         val arrayId = RemoteArrayId(NanEncoding.START_ARRAY_ID)
         assertTrue(NanEncoding.isArrayNan(arrayId.toNanFloat()))
+        assertTrue(arrayId.toMaybeVariableFloat().isArrayVariable)
 
         val intId = RemoteIntId(55)
         val encodedLong = intId.toLongEncodedId()
@@ -330,9 +333,35 @@ class RemoteProtocolParityTest {
             HostNamedActionType.FLOAT_ARRAY_TYPE,
         )
 
+        assertEquals(TextFromFloat.PAD_AFTER_SPACE, TextFromFloatFlags.PAD_AFTER_SPACE)
+        assertEquals(TextFromFloat.PAD_AFTER_NONE, TextFromFloatFlags.PAD_AFTER_NONE)
         assertEquals(TextFromFloat.PAD_AFTER_ZERO, TextFromFloatFlags.PAD_AFTER_ZERO)
+        assertEquals(TextFromFloat.PAD_PRE_SPACE, TextFromFloatFlags.PAD_PRE_SPACE)
         assertEquals(TextFromFloat.PAD_PRE_NONE, TextFromFloatFlags.PAD_PRE_NONE)
+        assertEquals(TextFromFloat.PAD_PRE_ZERO, TextFromFloatFlags.PAD_PRE_ZERO)
         assertEquals(TextFromFloat.GROUPING_BY3, TextFromFloatFlags.GROUPING_BY3)
+        assertEquals(TextFromFloat.GROUPING_BY4, TextFromFloatFlags.GROUPING_BY4)
+        assertEquals(TextFromFloat.GROUPING_BY32, TextFromFloatFlags.GROUPING_BY32)
+        assertEquals(
+            TextFromFloat.SEPARATOR_PERIOD_COMMA,
+            TextFromFloatFlags.SEPARATOR_PERIOD_COMMA,
+        )
+        assertEquals(
+            TextFromFloat.SEPARATOR_COMMA_PERIOD,
+            TextFromFloatFlags.SEPARATOR_COMMA_PERIOD,
+        )
+        assertEquals(TextFromFloat.SEPARATOR_SPACE_COMMA, TextFromFloatFlags.SEPARATOR_SPACE_COMMA)
+        assertEquals(
+            TextFromFloat.SEPARATOR_UNDER_PERIOD,
+            TextFromFloatFlags.SEPARATOR_UNDER_PERIOD,
+        )
+        assertEquals(TextFromFloat.OPTIONS_ROUNDING, TextFromFloatFlags.OPTIONS_ROUNDING)
+        assertEquals(
+            TextFromFloat.OPTIONS_NEGATIVE_PARENTHESES,
+            TextFromFloatFlags.OPTIONS_NEGATIVE_PARENTHESES,
+        )
+        assertEquals(TextFromFloat.LEGACY_MODE, TextFromFloatFlags.LEGACY_MODE)
+        assertEquals(TextFromFloat.FULL_FORMAT, TextFromFloatFlags.FULL_FORMAT)
         assertEquals(DrawTextAnchored.ANCHOR_TEXT_RTL, DrawTextAnchoredFlags.ANCHOR_TEXT_RTL)
         assertEquals(DrawTextAnchored.BASELINE_RELATIVE, DrawTextAnchoredFlags.BASELINE_RELATIVE)
         assertEquals(TextLayout.TEXT_ALIGN_CENTER, TextLayoutFlags.TEXT_ALIGN_CENTER)
@@ -487,6 +516,113 @@ class RemoteProtocolParityTest {
         assertFalse(RemoteContextIds.isTime(MaybeVariableFloat.literal(1f)))
         assertFalse(RemoteContextIds.isTime(MaybeVariableFloat.literal(Float.NaN)))
         assertFalse(RemoteContextIds.isTime(MaybeVariableFloat.literal(Float.fromBits(0x3F800001))))
+    }
+
+    @Test
+    fun testNanEncodingIgnoresSignBit() {
+        assertEquals(0x7F800000, NanEncoding.NAN_EXPONENT)
+        assertEquals(-1, NanEncoding.NO_ID)
+        assertTrue(NanEncoding.isNan(NanEncoding.asNan(42)))
+        assertEquals(42, NanEncoding.idFromNan(NanEncoding.asNan(42)))
+        assertTrue(NanEncoding.isNan(Float.fromBits(0x7F800005)))
+        assertEquals(5, NanEncoding.idFromNan(Float.fromBits(0x7F800005)))
+        assertTrue(NanEncoding.isNan(Float.fromBits(0x7FC00001)))
+        assertEquals(1, NanEncoding.idFromNan(Float.fromBits(0x7FC00001)))
+        assertFalse(NanEncoding.isNan(Float.NaN))
+        assertEquals(NanEncoding.NO_ID, NanEncoding.idFromNan(Float.NaN))
+        assertFalse(NanEncoding.isNan(Float.fromBits(0xFFC00000.toInt())))
+        assertEquals(NanEncoding.NO_ID, NanEncoding.idFromNan(Float.fromBits(0xFFC00000.toInt())))
+        assertFalse(NanEncoding.isNan(Float.POSITIVE_INFINITY))
+        assertFalse(NanEncoding.isNan(Float.NEGATIVE_INFINITY))
+
+        val posAddToken =
+            Float.fromBits((FloatRpn.OFFSET + FloatRpn.ID_ADD) or NanEncoding.NAN_EXPONENT)
+        assertTrue(FloatRpn.isOperator(posAddToken))
+        assertEquals(FloatRpn.ID_ADD, FloatRpn.operatorId(posAddToken))
+        assertFalse(FloatRpn.isOperator(Float.NaN))
+        assertEquals(NanEncoding.NO_ID, FloatRpn.operatorId(Float.NaN))
+    }
+
+    @Test
+    fun testMaybeDereferencedIdAndNanEncodingHelpers() {
+        assertEquals(PaintOperation.PTR_DEREFERENCE, MaybeDereferencedId.PTR_DEREFERENCE)
+        assertEquals(PaintOperation.VALUE_MASK, MaybeDereferencedId.VALUE_MASK)
+
+        val direct = MaybeDereferencedId.direct(42)
+        assertFalse(direct.isDereferenced)
+        assertEquals(42, direct.directId)
+        assertNull(direct.pointerId)
+        assertEquals(42, direct.unmaskedId)
+
+        val indirect = MaybeDereferencedId.dereferenced(42)
+        assertTrue(indirect.isDereferenced)
+        assertNull(indirect.directId)
+        assertEquals(42, indirect.pointerId)
+        assertEquals(42, indirect.unmaskedId)
+
+        // High bits above 16-bit VALUE_MASK (including sign bit 31 and bits 16..29) are masked out
+        val highBitsRaw = MaybeDereferencedId.fromRawInt(0x8003_002A.toInt())
+        assertFalse(highBitsRaw.isDereferenced)
+        assertEquals(42, highBitsRaw.unmaskedId)
+        assertEquals(42, highBitsRaw.directId)
+        assertNull(highBitsRaw.pointerId)
+        val highBitsPtr = MaybeDereferencedId.fromRawInt(0xC003_002A.toInt())
+        assertTrue(highBitsPtr.isDereferenced)
+        assertEquals(42, highBitsPtr.unmaskedId)
+        assertNull(highBitsPtr.directId)
+        assertEquals(42, highBitsPtr.pointerId)
+        assertEquals(42, MaybeDereferencedId.direct(0x1234_002A).raw)
+        assertEquals(
+            42 or PaintOperation.PTR_DEREFERENCE,
+            MaybeDereferencedId.dereferenced(0x1234_002A).raw,
+        )
+
+        for (id in -5..60) {
+            assertEquals(Utils.isSystemGlobal(id), NanEncoding.isSystemGlobalId(id))
+        }
+        for (id in intArrayOf(0x3FFF, 0x4000, 0x4FFF, 0x5000)) {
+            assertEquals(Utils.isMacroLocal(id), NanEncoding.isMacroLocalId(id))
+        }
+
+        assertEquals(-1, NanEncoding.idRegion(-1))
+        assertEquals(-1, NanEncoding.idRegion(Int.MIN_VALUE))
+        assertEquals(NanEncoding.REGION_SYSTEM, NanEncoding.idRegion(42))
+        assertEquals(
+            NanEncoding.REGION_VARIABLE,
+            NanEncoding.idRegion(NanEncoding.REGION_VARIABLE + 1),
+        )
+        assertEquals(NanEncoding.REGION_ARRAY, NanEncoding.idRegion(NanEncoding.START_ARRAY_ID))
+        assertEquals(
+            NanEncoding.REGION_OPERATION,
+            NanEncoding.idRegion(NanEncoding.REGION_OPERATION + 5),
+        )
+
+        assertTrue(NanEncoding.isNonIdFloatNan(Float.NaN))
+        assertFalse(NanEncoding.isNonIdFloatNan(Float.fromBits(0x7F800005)))
+        assertFalse(NanEncoding.isNonIdFloatNan(Float.fromBits(0x7FC00001)))
+        assertTrue(NanEncoding.isNonIdFloatNan(Float.fromBits(0xFFC00000.toInt())))
+        assertFalse(NanEncoding.isNonIdFloatNan(NanEncoding.asNan(42)))
+        assertFalse(NanEncoding.isNonIdFloatNan(Float.POSITIVE_INFINITY))
+        assertFalse(NanEncoding.isNonIdFloatNan(Float.NEGATIVE_INFINITY))
+        assertFalse(NanEncoding.isNonIdFloatNan(1.5f))
+
+        assertEquals(42, NanEncoding.decodeIdOrNull(NanEncoding.asNan(42)))
+        assertNull(NanEncoding.decodeIdOrNull(Float.NaN))
+        assertNull(NanEncoding.decodeIdOrNull(1.5f))
+
+        assertEquals(0, NanEncoding.decodeLongIdOrNull(NanEncoding.LONG_ID_OFFSET))
+        assertEquals(42, NanEncoding.decodeLongIdOrNull(NanEncoding.encodeLongId(42)))
+        assertEquals(
+            Int.MAX_VALUE,
+            NanEncoding.decodeLongIdOrNull(NanEncoding.LONG_ID_OFFSET + Int.MAX_VALUE),
+        )
+        assertNull(NanEncoding.decodeLongIdOrNull(NanEncoding.LONG_ID_OFFSET - 1L))
+        assertNull(NanEncoding.decodeLongIdOrNull(NanEncoding.LONG_ID_OFFSET + Int.MAX_VALUE + 1L))
+        assertNull(NanEncoding.decodeLongIdOrNull(42L))
+
+        assertTrue(MaybeVariableFloat.variable(NanEncoding.START_ARRAY_ID).isArrayVariable)
+        assertFalse(MaybeVariableFloat.variable(42).isArrayVariable)
+        assertFalse(1.5f.mvf.isArrayVariable)
     }
 
     @Test
@@ -681,5 +817,214 @@ class RemoteProtocolParityTest {
             Utils.toARGB(0.5f, 0.25f, 0.75f, 1.0f),
             RemoteColorMath.toArgb(0.5f, 0.25f, 0.75f, 1.0f),
         )
+    }
+
+    @Test
+    fun testTextFromFloatFormatterBitForBitParityWithStringUtils() {
+        val values =
+            floatArrayOf(
+                0f,
+                -0f,
+                1e-4f,
+                12.345f,
+                -987654.3f,
+                0.999f,
+                1234567.8f,
+                -0.05f,
+                42f,
+                Float.NaN,
+                Float.POSITIVE_INFINITY,
+                Float.NEGATIVE_INFINITY,
+            )
+        val flagCombos =
+            intArrayOf(
+                TextFromFloatFlags.PAD_PRE_NONE or TextFromFloatFlags.PAD_AFTER_ZERO,
+                TextFromFloatFlags.PAD_PRE_ZERO or TextFromFloatFlags.PAD_AFTER_ZERO,
+                TextFromFloatFlags.PAD_PRE_SPACE or TextFromFloatFlags.PAD_AFTER_SPACE,
+                TextFromFloatFlags.PAD_PRE_NONE or
+                    TextFromFloatFlags.PAD_AFTER_NONE or
+                    TextFromFloatFlags.GROUPING_BY3 or
+                    TextFromFloatFlags.SEPARATOR_COMMA_PERIOD,
+                TextFromFloatFlags.PAD_PRE_NONE or
+                    TextFromFloatFlags.PAD_AFTER_ZERO or
+                    TextFromFloatFlags.GROUPING_BY4 or
+                    TextFromFloatFlags.SEPARATOR_PERIOD_COMMA or
+                    TextFromFloatFlags.OPTIONS_NEGATIVE_PARENTHESES,
+                TextFromFloatFlags.PAD_PRE_NONE or
+                    TextFromFloatFlags.PAD_AFTER_ZERO or
+                    TextFromFloatFlags.GROUPING_BY32 or
+                    TextFromFloatFlags.SEPARATOR_SPACE_COMMA or
+                    TextFromFloatFlags.OPTIONS_ROUNDING,
+                TextFromFloatFlags.PAD_PRE_ZERO or
+                    TextFromFloatFlags.PAD_AFTER_ZERO or
+                    TextFromFloatFlags.GROUPING_BY3 or
+                    TextFromFloatFlags.SEPARATOR_UNDER_PERIOD or
+                    TextFromFloatFlags.OPTIONS_ROUNDING or
+                    TextFromFloatFlags.OPTIONS_NEGATIVE_PARENTHESES,
+                TextFromFloatFlags.PAD_PRE_ZERO or
+                    TextFromFloatFlags.PAD_AFTER_ZERO or
+                    TextFromFloatFlags.LEGACY_MODE,
+                TextFromFloatFlags.PAD_PRE_NONE or
+                    TextFromFloatFlags.PAD_AFTER_NONE or
+                    TextFromFloatFlags.LEGACY_MODE,
+                TextFromFloatFlags.PAD_PRE_SPACE or
+                    TextFromFloatFlags.PAD_AFTER_SPACE or
+                    TextFromFloatFlags.LEGACY_MODE,
+                TextFromFloatFlags.FULL_FORMAT,
+            )
+        val digitPairs = listOf(8 to 2, 8 to 0, 0 to 2, 8 to 4)
+
+        for ((before, after) in digitPairs) {
+            for (flags in flagCombos) {
+                // Decode flags independently using remote-core's TextFromFloat constants so the
+                // oracle does not depend on TextFromFloatFormatter.parseSpec.
+                val oraclePadAfter =
+                    when (flags and 3) {
+                        TextFromFloat.PAD_AFTER_SPACE -> ' '
+                        TextFromFloat.PAD_AFTER_NONE -> '\u0000'
+                        TextFromFloat.PAD_AFTER_ZERO -> '0'
+                        else -> ' '
+                    }
+                val oraclePadBefore =
+                    when (flags and (3 shl 2)) {
+                        TextFromFloat.PAD_PRE_SPACE -> ' '
+                        TextFromFloat.PAD_PRE_NONE -> '\u0000'
+                        TextFromFloat.PAD_PRE_ZERO -> '0'
+                        else -> ' '
+                    }
+                val oracleGrouping =
+                    when (flags and (3 shl 4)) {
+                        TextFromFloat.GROUPING_BY3 -> StringUtils.GROUPING_BY3
+                        TextFromFloat.GROUPING_BY4 -> StringUtils.GROUPING_BY4
+                        TextFromFloat.GROUPING_BY32 -> StringUtils.GROUPING_BY32
+                        else -> StringUtils.GROUPING_NONE
+                    }
+                val oracleSeparator =
+                    when (flags and (3 shl 6)) {
+                        TextFromFloat.SEPARATOR_PERIOD_COMMA -> StringUtils.SEPARATOR_PERIOD_COMMA
+                        TextFromFloat.SEPARATOR_COMMA_PERIOD -> StringUtils.SEPARATOR_COMMA_PERIOD
+                        TextFromFloat.SEPARATOR_SPACE_COMMA -> StringUtils.SEPARATOR_SPACE_COMMA
+                        else -> StringUtils.SEPARATOR_UNDER_PERIOD
+                    }
+                for (v in values) {
+                    val isFull = (flags and TextFromFloat.FULL_FORMAT) != 0
+                    val expected =
+                        when {
+                            isFull -> v.toString()
+                            (flags and TextFromFloat.LEGACY_MODE) != 0 ->
+                                StringUtils.floatToString(
+                                    v,
+                                    before,
+                                    after,
+                                    oraclePadBefore,
+                                    oraclePadAfter,
+                                )
+                            else -> {
+                                var opts = 0
+                                if ((flags and TextFromFloat.OPTIONS_ROUNDING) != 0) {
+                                    opts = opts or StringUtils.ROUNDING
+                                }
+                                if ((flags and TextFromFloat.OPTIONS_NEGATIVE_PARENTHESES) != 0) {
+                                    opts = opts or StringUtils.NEGATIVE_PARENTHESES
+                                }
+                                StringUtils.floatToString(
+                                    v,
+                                    before,
+                                    after,
+                                    oraclePadBefore,
+                                    oraclePadAfter,
+                                    oracleSeparator,
+                                    oracleGrouping,
+                                    opts,
+                                )
+                            }
+                        }
+                    assertEquals(
+                        expected,
+                        TextFromFloatFormatter.format(
+                            value = v,
+                            digitsBefore = before,
+                            digitsAfter = after,
+                            flags = flags,
+                        ),
+                        "Formatting mismatch for v=$v before=$before after=$after flags=0x${flags.toString(16)}",
+                    )
+                }
+            }
+        }
+
+        // Bounds validation rejects negative and excessively large digit counts
+        assertFailsWith<IllegalArgumentException> {
+            TextFromFloatFormatter.parseSpec(-1, 2, TextFromFloatFlags.PAD_PRE_NONE)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            TextFromFloatFormatter.parseSpec(2, -1, TextFromFloatFlags.PAD_PRE_NONE)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            TextFromFloatFormatter.parseSpec(
+                TextFromFloatFormatter.MAX_DIGITS + 1,
+                2,
+                TextFromFloatFlags.PAD_PRE_NONE,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            TextFromFloatFormatter.format(
+                1.5f,
+                2,
+                TextFromFloatFormatter.MAX_DIGITS + 1,
+                TextFromFloatFlags.PAD_PRE_NONE,
+            )
+        }
+    }
+
+    @Test
+    fun testProfileOperationRegistry() {
+        val registry = ProfileOperationRegistry()
+        val otherRegistry = ProfileOperationRegistry()
+        val maskA = 1 shl 28
+        val maskB = 1 shl 29
+        val maskBoth = maskA or maskB
+        val opcodeA = 254
+        val opcodeB = 255
+        val opcodeOverride = 253
+
+        // register(0) rejected; unregister on absent mask is a no-op
+        assertFailsWith<IllegalArgumentException> { registry.register(0) { emptySet() } }
+        registry.unregister(maskA)
+
+        // Built-in RcProfiles delegation (HEADER opcode 0 is supported in API 6)
+        assertTrue(registry.isOpcodeSupported(0, apiLevel = 6, profileFlags = 0))
+
+        assertFalse(registry.isOpcodeSupported(opcodeA, 7, maskA))
+        registry.register(maskA) { setOf(opcodeA) }
+        assertEquals(setOf(opcodeA), registry.resolveOperationIds(maskA))
+        assertTrue(registry.isOpcodeSupported(opcodeA, 7, maskA))
+        assertFalse(registry.isOpcodeSupported(opcodeA, 7, 0))
+
+        // Separate instances remain isolated from each other
+        assertFalse(otherRegistry.isOpcodeSupported(opcodeA, 7, maskA))
+        assertTrue(otherRegistry.resolveOperationIds(maskA).isEmpty())
+
+        // apiLevel <= 6 ignores custom profile providers
+        assertFalse(registry.isOpcodeSupported(opcodeA, 6, maskA))
+
+        // Multi-provider additive union & partial-bit non-match
+        registry.register(maskBoth) { setOf(opcodeB) }
+        assertEquals(setOf(opcodeA), registry.resolveOperationIds(maskA))
+        assertFalse(registry.isOpcodeSupported(opcodeB, 7, maskA))
+        assertFalse(registry.isOpcodeSupported(opcodeB, 7, maskB))
+        assertEquals(setOf(opcodeA, opcodeB), registry.resolveOperationIds(maskBoth))
+        assertTrue(registry.isOpcodeSupported(opcodeA, 7, maskBoth))
+        assertTrue(registry.isOpcodeSupported(opcodeB, 7, maskBoth))
+
+        // Re-registering same mask overwrites previous provider
+        registry.register(maskA) { setOf(opcodeOverride) }
+        assertEquals(setOf(opcodeOverride), registry.resolveOperationIds(maskA))
+        assertFalse(registry.isOpcodeSupported(opcodeA, 7, maskA))
+        assertTrue(registry.isOpcodeSupported(opcodeOverride, 7, maskA))
+
+        registry.unregister(maskA)
+        registry.unregister(maskBoth)
+        assertTrue(registry.resolveOperationIds(maskBoth).isEmpty())
     }
 }

@@ -36,6 +36,7 @@ import androidx.compose.remote.core.RemoteComposeState
 import androidx.compose.remote.core.RemoteContext
 import androidx.compose.remote.core.VariableProvider
 import androidx.compose.remote.core.VariableSupport
+import androidx.compose.remote.core.operations.BinaryData
 import androidx.compose.remote.core.operations.BitmapTextMeasure
 import androidx.compose.remote.core.operations.ColorConstant
 import androidx.compose.remote.core.operations.ColorTheme
@@ -48,6 +49,7 @@ import androidx.compose.remote.core.operations.Header
 import androidx.compose.remote.core.operations.IdLookup
 import androidx.compose.remote.core.operations.ImageAttribute
 import androidx.compose.remote.core.operations.IntegerExpression
+import androidx.compose.remote.core.operations.MapRcDocVariables
 import androidx.compose.remote.core.operations.NamedVariable
 import androidx.compose.remote.core.operations.PaintData
 import androidx.compose.remote.core.operations.ParticlesCompare
@@ -78,6 +80,7 @@ import androidx.compose.remote.core.operations.layout.LoopOperation
 import androidx.compose.remote.core.operations.layout.managers.StateLayout
 import androidx.compose.remote.core.operations.layout.modifiers.ComponentModifiers
 import androidx.compose.remote.core.operations.layout.modifiers.ComponentVisibilityOperation
+import androidx.compose.remote.core.operations.layout.modifiers.EventHandlerModifierOperation
 import androidx.compose.remote.core.operations.layout.modifiers.ScrollModifierOperation
 import androidx.compose.remote.core.operations.matrix.MatrixConstant
 import androidx.compose.remote.core.operations.matrix.MatrixExpression
@@ -87,6 +90,7 @@ import androidx.compose.remote.core.types.IntegerConstant
 import androidx.compose.remote.core.types.LongConstant
 import androidx.compose.remote.player.compose.embedded.components.rootTouchExpressions
 import androidx.compose.remote.player.compose.embedded.draw.TextMeasurePaintSpec
+import androidx.compose.remote.player.compose.embedded.modifier.parseEventHandler
 import androidx.compose.remote.player.compose.embedded.state.MaybeVariableFloat
 import androidx.compose.remote.player.compose.embedded.state.anyScalarReference
 import androidx.compose.remote.player.compose.embedded.state.forEachScalarReference
@@ -129,6 +133,8 @@ internal class DocumentPreprocessResult(
      * it from inputs that have since moved on.
      */
     val streamFloatIds: IntSet = emptyIntSet(),
+    /** [MapRcDocVariables] mappings grouped by their target `RcDocLayout` component ID. */
+    val rcDocMappingsMap: Map<Int, List<MapRcDocVariables>> = emptyMap(),
 )
 
 /**
@@ -151,6 +157,7 @@ internal fun buildComputedOpIndex(operations: Collection<Operation>): IntObjectM
             } else if (
                 op is VariableSupport &&
                     op is VariableProvider &&
+                    op !is BinaryData &&
                     op !is MatrixExpression &&
                     op !is MatrixConstant
             ) {
@@ -198,6 +205,7 @@ private fun preprocessDocumentImpl(document: CoreDocument): DocumentPreprocessRe
     var currentTextPaintSpec = TextMeasurePaintSpec.Empty
     val touchExpressionIds = mutableIntSetOf()
     val rawComponentValues = ArrayList<ComponentValue>()
+    val rcDocMappingsMap = HashMap<Int, MutableList<MapRcDocVariables>>()
     val componentsById = mutableIntObjectMapOf<Component>()
     var hasParticles = false
     var hasWakeIn = false
@@ -213,6 +221,17 @@ private fun preprocessDocumentImpl(document: CoreDocument): DocumentPreprocessRe
     val streamFloatIds = mutableIntSetOf()
     // The first expression assigned to each float id; the same operation can be visited twice.
     val firstAssignments = mutableIntObjectMapOf<Operation>()
+
+    fun recordListenedVariableId(id: Int) {
+        if (isTouchPositionVariable(id)) {
+            readsTouchPosition = true
+        } else if (isContinuousTimeVariable(id)) {
+            hasContinuousTime = true
+        } else if (isDiscreteTimeVariable(id)) {
+            hasDiscreteTime = true
+            discreteTimeMask = discreteTimeMask or (1 shl discreteTimeIndex(id))
+        }
+    }
 
     fun collectFunctionWrites(ops: List<Operation>) {
         ops.fastForEach { op ->
@@ -278,26 +297,26 @@ private fun preprocessDocumentImpl(document: CoreDocument): DocumentPreprocessRe
 
             // Collect direct references to continuous or discrete time variables from expressions
             // and variable-reading operations so we know which clock loop (if any) needs to run.
-            if (op is StateLayout) {
-                // StateLayout does not implement VariableSupport, so inspect its indexId directly.
-                val id = op.indexId
-                if (isContinuousTimeVariable(id)) {
-                    hasContinuousTime = true
-                } else if (isDiscreteTimeVariable(id)) {
-                    hasDiscreteTime = true
-                    discreteTimeMask = discreteTimeMask or (1 shl discreteTimeIndex(id))
-                }
-            } else {
-                forEachListenedVariableId(op) { id ->
-                    if (isTouchPositionVariable(id)) {
-                        readsTouchPosition = true
-                    } else if (isContinuousTimeVariable(id)) {
+            when (op) {
+                is StateLayout -> {
+                    // StateLayout does not implement VariableSupport, so inspect its indexId
+                    // directly.
+                    val id = op.indexId
+                    if (isContinuousTimeVariable(id)) {
                         hasContinuousTime = true
                     } else if (isDiscreteTimeVariable(id)) {
                         hasDiscreteTime = true
                         discreteTimeMask = discreteTimeMask or (1 shl discreteTimeIndex(id))
                     }
                 }
+                is EventHandlerModifierOperation -> {
+                    // EventHandlerModifierOperation does not implement VariableSupport, so inspect
+                    // its condition expression directly for time or touch-position variables.
+                    op.parseEventHandler()
+                        .condition
+                        ?.forEachScalarReference(::recordListenedVariableId)
+                }
+                else -> forEachListenedVariableId(op, ::recordListenedVariableId)
             }
 
             if (op is TimeAttribute) {
@@ -386,6 +405,7 @@ private fun preprocessDocumentImpl(document: CoreDocument): DocumentPreprocessRe
             } else if (
                 op is VariableSupport &&
                     op is VariableProvider &&
+                    op !is BinaryData &&
                     op !is PathData &&
                     op !is PathCreate &&
                     op !is PathCombine &&
@@ -447,6 +467,13 @@ private fun preprocessDocumentImpl(document: CoreDocument): DocumentPreprocessRe
             }
             if (op is ComponentValue) {
                 rawComponentValues.add(op)
+            }
+
+            if (op is MapRcDocVariables) {
+                val list = rcDocMappingsMap.getOrPut(op.docId) { ArrayList() }
+                if (!list.contains(op)) {
+                    list.add(op)
+                }
             }
 
             if (op is Component) {
@@ -562,6 +589,7 @@ private fun preprocessDocumentImpl(document: CoreDocument): DocumentPreprocessRe
         discreteTimeMask = discreteTimeMask,
         readsTouchPosition = readsTouchPosition,
         streamFloatIds = streamFloatIds,
+        rcDocMappingsMap = rcDocMappingsMap,
     )
 }
 

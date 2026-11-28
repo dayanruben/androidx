@@ -22,6 +22,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.remote.core.CoreDocument
+import androidx.compose.remote.core.operations.BinaryData
+import androidx.compose.remote.core.operations.MapRcDocVariables
 import androidx.compose.remote.core.operations.RootContentBehavior
 import androidx.compose.remote.core.operations.layout.Component
 import androidx.compose.remote.core.operations.layout.LayoutComponent
@@ -35,6 +37,7 @@ import androidx.compose.remote.core.operations.layout.managers.Custom
 import androidx.compose.remote.core.operations.layout.managers.FitBoxLayout
 import androidx.compose.remote.core.operations.layout.managers.FlowLayout
 import androidx.compose.remote.core.operations.layout.managers.ImageLayout
+import androidx.compose.remote.core.operations.layout.managers.RcDocLayout
 import androidx.compose.remote.core.operations.layout.managers.RowLayout
 import androidx.compose.remote.core.operations.layout.managers.StateLayout
 import androidx.compose.remote.core.operations.layout.managers.TextInputLayout
@@ -58,10 +61,13 @@ import androidx.compose.remote.player.compose.embedded.layout.RcPlayerColumn
 import androidx.compose.remote.player.compose.embedded.layout.RcPlayerFitBoxLayout
 import androidx.compose.remote.player.compose.embedded.layout.RcPlayerFlowRow
 import androidx.compose.remote.player.compose.embedded.layout.RcPlayerImageLayout
+import androidx.compose.remote.player.compose.embedded.layout.RcPlayerRcDoc
 import androidx.compose.remote.player.compose.embedded.layout.RcPlayerRow
 import androidx.compose.remote.player.compose.embedded.layout.RcPlayerStateLayout
 import androidx.compose.remote.player.compose.embedded.layout.RcPlayerTextInputLayout
 import androidx.compose.remote.player.compose.embedded.modifier.ClickActionHandlers
+import androidx.compose.remote.player.compose.embedded.modifier.keyEventActions
+import androidx.compose.remote.player.compose.embedded.modifier.pointerEventActions
 import androidx.compose.remote.player.compose.embedded.modifier.toModifier
 import androidx.compose.remote.player.compose.embedded.state.rememberRemoteFloatAsState
 import androidx.compose.runtime.Composable
@@ -160,7 +166,12 @@ internal fun RcPlayerRootLayoutComponent(root: RootLayoutComponent) {
     val remoteContext = LocalRemoteContext.current
     val graph = LocalGraphContext.current
 
-    val drawOps = remember(root) { root.list.fastFilter { it !is Component } }
+    val drawOps =
+        remember(root) {
+            root.list.fastFilter {
+                it !is Component && it !is MapRcDocVariables && it !is BinaryData
+            }
+        }
     if (drawOps.isNotEmpty()) {
         val textMeasurer = rememberTextMeasurer()
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -231,6 +242,13 @@ internal fun RcPlayerComponent(component: Component, modifier: Modifier = Modifi
         // modifiers and outside the component's own modifiers.
         val contentModifier =
             Modifier.rcComponentOuterInspector(component)
+                // Outside the component's modifiers, so key events from a focus target they add
+                // (e.g. a clickable) bubble up to the handlers.
+                .keyEventActions(component)
+                // Outside the component's modifiers (incl. PaddingModifierOperation), so hit
+                // testing covers the component's outer bounds and local coordinates match
+                // PointerInputRouter's component-local origin.
+                .pointerEventActions(component)
                 .then(
                     component.componentModifiers.toModifier(
                         component.drawContentOperations?.list,
@@ -409,6 +427,7 @@ private fun RcPlayerLayoutComponent(
         is StateLayout -> RcPlayerStateLayout(component, modifier)
         is TextInputLayout -> RcPlayerTextInputLayout(component, modifier)
         is ImageLayout -> RcPlayerImageLayout(component, modifier)
+        is RcDocLayout -> RcPlayerRcDoc(component, modifier)
         is Custom -> RcPlayerCustom(component, modifier, customClickHandlers)
         // Last as others are often BoxLayout subclasses
         is BoxLayout -> RcPlayerBox(component, modifier)

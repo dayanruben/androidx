@@ -834,20 +834,25 @@ class RemoteComposeGeneratorTest {
         val generator = SwiftGenerator(schema)
         val code = generator.generate()
 
-        assertTrue(code.contains("public enum OpCode: UInt8, CaseIterable {"))
+        assertTrue(
+            code.contains(
+                "public enum OpCode: UInt8, CaseIterable, Equatable, Hashable, Sendable {"
+            )
+        )
         assertTrue(code.contains("case drawCircle = 46"))
         assertTrue(code.contains("case boxLayout = 202"))
-        assertTrue(code.contains("public struct DrawCircle: RemoteOperation, Equatable {"))
-        assertTrue(code.contains("public struct WireBuffer {"))
-        assertTrue(code.contains("public struct RemoteDocument {"))
+        assertTrue(code.contains("public struct DrawCircle: Equatable, Hashable, Sendable {"))
+        assertTrue(code.contains("public enum WireOperation: Equatable, Hashable, Sendable {"))
+        assertTrue(code.contains("public struct WireBuffer: Equatable, Hashable, Sendable {"))
+        assertTrue(code.contains("public struct WireDocument: Equatable, Hashable, Sendable {"))
         assertTrue(code.contains("buffer.writeFloat(radius)"))
         assertTrue(code.contains("try buffer.readFloat()"))
-        assertTrue(code.contains("guard numProps >= 0 && numProps <= MAX_HEADER_PROPERTIES else {"))
-        assertTrue(code.contains("let key = tag & 0x3F"))
+        assertTrue(code.contains("guard numProps >= 0 && numProps <= maxHeaderProperties else {"))
+        assertTrue(code.contains("let key = Int32(rawTag) & 0x3F"))
         assertTrue(code.contains("guard _argsCount >= 0 else {"))
-        assertTrue(code.contains("public mutating func readShort() throws -> Int16"))
+        assertTrue(code.contains("public mutating func readShort() throws(WireError) -> Int16"))
         assertTrue(code.contains("public mutating func writeShort(_ value: Int16)"))
-        assertTrue(code.contains("Unknown opcode:"))
+        assertTrue(code.contains("throw WireError.unknownOpCode(opByte)"))
     }
 
     @Test
@@ -2695,17 +2700,31 @@ class RemoteComposeGeneratorTest {
             "Swift must not use overflowing index + len <= data.count",
             swiftCode.contains("index + len <= data.count"),
         )
-        assertTrue(swiftCode.contains("data.startIndex == 0 ? data : Data(data)"))
+        assertFalse("Swift must not import Foundation", swiftCode.contains("import Foundation"))
+        assertFalse("Swift must not throw NSError", swiftCode.contains("NSError"))
+        assertFalse(
+            "Swift must not emit unqualified min() or max() that fields can shadow",
+            Regex("""(?<!Swift\.)\b(?:min|max)\(""").containsMatchIn(swiftCode),
+        )
+        assertTrue(swiftCode.contains("public private(set) var data: [UInt8]"))
         assertTrue(swiftCode.contains("public private(set) var index: Int = 0"))
-        assertTrue(swiftCode.contains("MAX_HEADER_PROPERTIES"))
-        assertTrue(swiftCode.contains("MAX_OPERATION_COUNT"))
-        assertTrue(swiftCode.contains("Unexpected Header opcode inside document body"))
-        assertTrue(swiftCode.contains("Compressed RemoteCompose documents are not supported"))
-        assertTrue(swiftCode.contains("Invalid header magic number"))
+        assertTrue(swiftCode.contains("maxHeaderProperties"))
+        assertTrue(swiftCode.contains("maxOperationCount"))
+        assertTrue(swiftCode.contains("throw WireError.unexpectedHeaderInBody"))
+        assertTrue(swiftCode.contains("throw WireError.compressedDocumentUnsupported"))
+        assertTrue(swiftCode.contains("throw WireError.invalidHeaderMagic(rawMajor)"))
         assertTrue(swiftCode.contains("guard _glyphsCount <= buffer.remaining / 20 else"))
         assertTrue(swiftCode.contains("guard sparseCount <= buffer.remaining / 2 else"))
-        assertTrue(swiftCode.contains("Invalid enum value for mode"))
-        assertTrue(swiftCode.contains("Invalid enum value for attributeType"))
+        assertTrue(
+            swiftCode.contains(
+                "throw WireError.invalidFieldValue(owner: \"ColorExpression\", field: \"mode\""
+            )
+        )
+        assertTrue(
+            swiftCode.contains(
+                "throw WireError.invalidFieldValue(owner: \"GraphicsLayerAttribute\", field: \"attributeType\""
+            )
+        )
         assertTrue(swiftCode.contains("buffer.readUTF8(maxLength: 4000)"))
         assertTrue(swiftCode.contains("buffer.readBuffer(maxLength: 800000)"))
         assertTrue(swiftCode.contains("(raw_versionAndNumGlyphs >> 16)"))
@@ -3618,18 +3637,18 @@ class RemoteComposeGeneratorTest {
         // Verify SwiftGenerator
         val swiftCode = SwiftGenerator(synSchema).generate()
         assertTrue(
-            "Swift protocol write must throw",
-            swiftCode.contains("func write(to buffer: inout WireBuffer) throws"),
+            "Swift WireOperation write must use typed throws(WireError)",
+            swiftCode.contains("public func write(to buffer: inout WireBuffer) throws(WireError)"),
         )
         assertTrue(
-            "Swift save must throw and forward try op.write",
-            swiftCode.contains("public func save() throws -> Data") &&
+            "Swift WireDocument.save must return [UInt8] with typed throws and forward try op.write",
+            swiftCode.contains("public func save() throws(WireError) -> [UInt8]") &&
                 swiftCode.contains("try op.write(to: &buffer)"),
         )
         assertTrue(
-            "Swift must throw NSError instead of preconditionFailure on missing required field",
+            "Swift must throw WireError.missingRequiredField instead of preconditionFailure",
             swiftCode.contains(
-                "throw NSError(domain: \"SyntheticTestOp\", code: 3, userInfo: [NSLocalizedDescriptionKey: \"Missing required field optPacked\"])"
+                "throw WireError.missingRequiredField(owner: \"SyntheticTestOp\", field: \"optPacked\")"
             ) && !swiftCode.contains("preconditionFailure"),
         )
         assertTrue(
@@ -4006,12 +4025,14 @@ class RemoteComposeGeneratorTest {
         val swiftSrc = SwiftGenerator(schema).generate()
         assertTrue(
             swiftSrc.contains(
-                "throw NSError(domain: \"HeaderProperty\", code: 3, userInfo: [NSLocalizedDescriptionKey: \"Missing required field intValue\"])"
+                "throw WireError.missingRequiredField(owner: \"HeaderProperty\", field: \"intValue\")"
             )
         )
         assertTrue(
             "Swift modern Header must default omitted width/height to 256",
-            swiftSrc.contains("doc.width = 256") && swiftSrc.contains("doc.height = 256"),
+            swiftSrc.contains("public static let defaultDimension: Int32 = 256") &&
+                swiftSrc.contains("doc.width = defaultDimension") &&
+                swiftSrc.contains("doc.height = defaultDimension"),
         )
         val pySrc = PythonGenerator(schema).generate()
         assertTrue(pySrc.contains("raise ValueError(\"Missing required field intValue\")"))
@@ -4531,7 +4552,7 @@ class RemoteComposeGeneratorTest {
             swiftCode
                 .substringAfter("public struct ImageAttribute:")
                 .substringBefore("public struct TimeAttribute:")
-        assertFalse(swiftImageSection.contains("<= 32"))
+        assertFalse(swiftImageSection.contains("<= 32 else"))
 
         // Skip conditional framing & player load in Kotlin, TS, Swift
         assertTrue(ktAst.contains("internal fun shouldSkip("))
@@ -5029,31 +5050,65 @@ class RemoteComposeGeneratorTest {
         val swiftCode = SwiftGenerator(schema).generate()
         for (marker in
             listOf(
+                "public enum OpCode: UInt8, CaseIterable, Equatable, Hashable, Sendable",
+                "public enum WireError: Error, Equatable, Hashable, Sendable",
+                "public struct WireBuffer: Equatable, Hashable, Sendable",
+                "public enum WireOperation: Equatable, Hashable, Sendable",
+                "public struct WireDocument: Equatable, Hashable, Sendable",
+                "public enum HeaderPropertyValue: Equatable, Hashable, Sendable",
+                "public struct WireHeaderProperty: Equatable, Hashable, Sendable",
+                "private func wireFloatEquals(_ lhs: Float, _ rhs: Float) -> Bool",
+                "public static func == (lhs: HeaderPropertyValue, rhs: HeaderPropertyValue) -> Bool",
+                "public static func == (lhs: FloatExpression, rhs: FloatExpression) -> Bool",
+                "let itemLen = Int(UInt16(bitPattern: try buffer.readShort()))",
+                "let dataType = Int32(rawTag) >> 10",
+                "case unknown(dataType: Int32, payload: [UInt8])",
+                "let payload = try buffer.readBytes(count: itemLen)",
+                "buffer.writeBytes(payload)",
+                "outProps.lastIndex(where:",
+                "guard majorVersion >= 0 && majorVersion <= 0xFFFF else",
+                "if capabilities >= 0 && capabilities <= Int64(UInt32.max)",
                 "public enum IdEncoding",
+                "public static let nanExponent: Int32 = 2139095040",
+                "public static let noId: Int32 = -1",
                 "public enum HeaderConstants",
                 "public enum PaintCommandTags",
                 "public enum PaintConstants",
                 "public enum PathCommandTags",
                 "public enum RemoteContextIds",
                 "public enum AnimationEasing",
-                "public struct FloatAnimationSpec: Equatable",
+                "public struct FloatAnimationSpec: Equatable, Hashable, Sendable",
                 "public static func == (lhs: FloatAnimationSpec, rhs: FloatAnimationSpec) -> Bool",
-                "public indirect enum PathEffect: Equatable",
-                "public enum PathCommand: Equatable",
+                "public func hash(into hasher: inout Hasher)",
+                "public indirect enum PathEffect: Equatable, Hashable, Sendable",
+                "public static func == (lhs: PathEffect, rhs: PathEffect) -> Bool",
+                "public enum PathCommand: Equatable, Hashable, Sendable",
+                "public static func == (lhs: PathCommand, rhs: PathCommand) -> Bool",
                 "public var isSpringAnimation: Bool",
-                "public func unpackAnimationSpec() throws -> FloatAnimationSpec",
-                "public func encode() throws -> [Float]",
+                "public func unpackAnimationSpec() throws(WireError) -> FloatAnimationSpec",
+                "public func encode() throws(WireError) -> [Float]",
                 "public var uncompressedByteSize: Int64",
                 "multipliedReportingOverflow",
                 "public func decodePathCommands() -> [PathCommand]",
                 "public var alphaPayload: Int32",
+                "reserveCapacity(Swift.min(",
+                "public static let roundedRectangle: Int32 = 2",
             )) {
             assertTrue("Swift output missing: $marker", swiftCode.contains(marker))
         }
         assertFalse(
-            "Swift output must not reference undefined WireError",
-            swiftCode.contains("WireError"),
+            "Swift output must not define RemoteOperation protocol",
+            swiftCode.contains("protocol RemoteOperation"),
         )
+        assertFalse(
+            "Swift output must not define RemoteDocument",
+            swiftCode.contains("struct RemoteDocument"),
+        )
+        assertFalse(
+            "Swift output must not import Foundation",
+            swiftCode.contains("import Foundation"),
+        )
+        assertFalse("Swift output must not throw NSError", swiftCode.contains("NSError"))
 
         // Standalone Rust generateStruct output must not reference module-level protocol helpers
         val standaloneFloatExpr =
@@ -5132,10 +5187,15 @@ class RemoteComposeGeneratorTest {
                             int32_t nanBits = IdEncoding::asNanBits(42);
                             assert(IdEncoding::isNanBits(nanBits));
                             assert(IdEncoding::idFromNanBits(nanBits) == 42);
+                            assert(IdEncoding::isNanBits(0x7F800005));
+                            assert(IdEncoding::idFromNanBits(0x7F800005) == 5);
+                            assert(!IdEncoding::isNanBits(0x7F800000));
+                            assert(!IdEncoding::isNanBits(0x7FC00000));
+                            assert(IdEncoding::idFromNanBits(0x7FC00000) == IdEncoding::NO_ID);
                             assert(!IdEncoding::isNanBits(static_cast<int32_t>(0xFF800000u)));
-                            assert(IdEncoding::idFromNanBits(static_cast<int32_t>(0xFF800000u)) == -1);
+                            assert(IdEncoding::idFromNanBits(static_cast<int32_t>(0xFF800000u)) == IdEncoding::NO_ID);
                             assert(!IdEncoding::isNanBits(static_cast<int32_t>(0xFFC00000u)));
-                            assert(IdEncoding::idFromNanBits(static_cast<int32_t>(0xFFC00000u)) == -1);
+                            assert(IdEncoding::idFromNanBits(static_cast<int32_t>(0xFFC00000u)) == IdEncoding::NO_ID);
                             assert(!IdEncoding::isDereferenced(42));
                             assert(IdEncoding::directId(42) == 42);
                             assert(IdEncoding::pointerId(IdEncoding::PTR_DEREFERENCE | 7) == 7);
@@ -5260,10 +5320,15 @@ class RemoteComposeGeneratorTest {
                         let nan_bits = id_encoding::as_nan_bits(42);
                         assert!(id_encoding::is_nan_bits(nan_bits));
                         assert_eq!(id_encoding::id_from_nan_bits(nan_bits), 42);
+                        assert!(id_encoding::is_nan_bits(0x7F800005));
+                        assert_eq!(id_encoding::id_from_nan_bits(0x7F800005), 5);
+                        assert!(!id_encoding::is_nan_bits(0x7F800000));
+                        assert!(!id_encoding::is_nan_bits(0x7FC00000));
+                        assert_eq!(id_encoding::id_from_nan_bits(0x7FC00000), id_encoding::NO_ID);
                         assert!(!id_encoding::is_nan_bits(0xFF800000u32 as i32));
-                        assert_eq!(id_encoding::id_from_nan_bits(0xFF800000u32 as i32), -1);
+                        assert_eq!(id_encoding::id_from_nan_bits(0xFF800000u32 as i32), id_encoding::NO_ID);
                         assert!(!id_encoding::is_nan_bits(0xFFC00000u32 as i32));
-                        assert_eq!(id_encoding::id_from_nan_bits(0xFFC00000u32 as i32), -1);
+                        assert_eq!(id_encoding::id_from_nan_bits(0xFFC00000u32 as i32), id_encoding::NO_ID);
                         assert_eq!(id_encoding::direct_id(42), Some(42));
                         assert_eq!(id_encoding::pointer_id(id_encoding::PTR_DEREFERENCE | 7), Some(7));
                         assert!(remote_context_ids::is_time(remote_context_ids::ID_CONTINUOUS_SEC));
@@ -5374,10 +5439,15 @@ class RemoteComposeGeneratorTest {
                     nan_bits = IdEncoding.as_nan_bits(42)
                     assert IdEncoding.is_nan_bits(nan_bits)
                     assert IdEncoding.id_from_nan_bits(nan_bits) == 42
+                    assert IdEncoding.is_nan_bits(0x7F800005)
+                    assert IdEncoding.id_from_nan_bits(0x7F800005) == 5
+                    assert not IdEncoding.is_nan_bits(0x7F800000)
+                    assert not IdEncoding.is_nan_bits(0x7FC00000)
+                    assert IdEncoding.id_from_nan_bits(0x7FC00000) == IdEncoding.NO_ID
                     assert not IdEncoding.is_nan_bits(-0x800000)
-                    assert IdEncoding.id_from_nan_bits(-0x800000) == -1
+                    assert IdEncoding.id_from_nan_bits(-0x800000) == IdEncoding.NO_ID
                     assert not IdEncoding.is_nan_bits(-0x400000)
-                    assert IdEncoding.id_from_nan_bits(-0x400000) == -1
+                    assert IdEncoding.id_from_nan_bits(-0x400000) == IdEncoding.NO_ID
                     assert IdEncoding.direct_id(42) == 42
                     assert IdEncoding.pointer_id(IdEncoding.PTR_DEREFERENCE | 7) == 7
                     assert RemoteContextIds.is_time(RemoteContextIds.ID_CONTINUOUS_SEC)
@@ -5483,10 +5553,15 @@ class RemoteComposeGeneratorTest {
                         const nanBits = IdEncoding.asNanBits(42);
                         assert.equal(IdEncoding.isNanBits(nanBits), true);
                         assert.equal(IdEncoding.idFromNanBits(nanBits), 42);
+                        assert.equal(IdEncoding.isNanBits(0x7F800005), true);
+                        assert.equal(IdEncoding.idFromNanBits(0x7F800005), 5);
+                        assert.equal(IdEncoding.isNanBits(0x7F800000), false);
+                        assert.equal(IdEncoding.isNanBits(0x7FC00000), false);
+                        assert.equal(IdEncoding.idFromNanBits(0x7FC00000), IdEncoding.NO_ID);
                         assert.equal(IdEncoding.isNanBits(0xFF800000 | 0), false);
-                        assert.equal(IdEncoding.idFromNanBits(0xFF800000 | 0), -1);
+                        assert.equal(IdEncoding.idFromNanBits(0xFF800000 | 0), IdEncoding.NO_ID);
                         assert.equal(IdEncoding.isNanBits(0xFFC00000 | 0), false);
-                        assert.equal(IdEncoding.idFromNanBits(0xFFC00000 | 0), -1);
+                        assert.equal(IdEncoding.idFromNanBits(0xFFC00000 | 0), IdEncoding.NO_ID);
                         assert.equal(IdEncoding.directId(42), 42);
                         assert.equal(IdEncoding.pointerId(IdEncoding.PTR_DEREFERENCE | 7), 7);
                         assert.equal(RemoteContextIds.isTime(RemoteContextIds.ID_CONTINUOUS_SEC), true);
@@ -5571,6 +5646,495 @@ class RemoteComposeGeneratorTest {
                     tmpDir.deleteRecursively()
                 }
             }
+        }
+    }
+
+    @Test
+    fun testSchemaEnrichmentsAndMetadataValidation() {
+        val schema = loadSchema()
+
+        // 1. STORE_R0 renamed cleanly from STORE_RO
+        val rpnOps = checkNotNull(schema.rpnOperators)
+        assertEquals("STORE_R0", rpnOps.operatorsById[56]?.name)
+        assertNull(rpnOps.operatorsByName["STORE_RO"])
+
+        // 2. idEncoding includes nanExponent and noId
+        val enc = checkNotNull(schema.idEncoding)
+        assertEquals(0x7F800000, enc.nanExponent)
+        assertEquals(-1, enc.noId)
+
+        // 3. headerConstants includes dataTypes and version groups
+        assertEquals(0, schema.headerConstants["dataTypes"]?.get("DATA_TYPE_INT"))
+        assertEquals(1, schema.headerConstants["dataTypes"]?.get("DATA_TYPE_FLOAT"))
+        assertEquals(2, schema.headerConstants["dataTypes"]?.get("DATA_TYPE_LONG"))
+        assertEquals(3, schema.headerConstants["dataTypes"]?.get("DATA_TYPE_STRING"))
+        assertEquals(0x048C0000, schema.headerConstants["version"]?.get("MAGIC_NUMBER"))
+        assertEquals(256, schema.headerConstants["version"]?.get("DEFAULT_DIMENSION"))
+        assertEquals(0x77, schema.headerConstants["version"]?.get("COMPRESSED_STREAM_MARKER"))
+
+        // 4. HeaderProperty.tag.bits[dataType] enum
+        val hpTag = schema.structs["HeaderProperty"]!!.fields.first { it.name == "tag" }
+        val dtBit = hpTag.bits!!.first { it.name == "dataType" }
+        assertEquals(
+            mapOf(
+                "DATA_TYPE_INT" to 0,
+                "DATA_TYPE_FLOAT" to 1,
+                "DATA_TYPE_LONG" to 2,
+                "DATA_TYPE_STRING" to 3,
+            ),
+            dtBit.enumValues,
+        )
+
+        // 5. visibilityConstants match Component.Visibility
+        assertEquals(
+            mapOf(
+                "GONE" to 0,
+                "VISIBLE" to 1,
+                "INVISIBLE" to 2,
+                "OVERRIDE_GONE" to 16,
+                "OVERRIDE_VISIBLE" to 32,
+                "OVERRIDE_INVISIBLE" to 64,
+                "CLEAR_OVERRIDE" to 128,
+            ),
+            schema.visibilityConstants,
+        )
+
+        // 6. Border/Background/TextLayout enums and TextLayout.color.resolvedAfter
+        val border = schema.operationsByName.getValue("BorderModifierOperation")
+        assertEquals(
+            mapOf("RECTANGLE" to 0, "CIRCLE" to 1, "ROUNDED_RECTANGLE" to 2),
+            border.fields.first { it.name == "shapeType" }.enumValues,
+        )
+        assertEquals(
+            mapOf("COLOR_REF" to 2),
+            border.fields.first { it.name == "flags" }.enumValues,
+        )
+        assertEquals(
+            mapOf("LEGACY" to 0, "VERSION_1" to 1),
+            border.fields.first { it.name == "reserve1" }.enumValues,
+        )
+        val bg = schema.operationsByName.getValue("BackgroundModifierOperation")
+        assertEquals(mapOf("COLOR_REF" to 2), bg.fields.first { it.name == "flags" }.enumValues)
+
+        val textLayout = schema.operationsByName.getValue("TextLayout")
+        assertEquals("textAlign", textLayout.fields.first { it.name == "color" }.resolvedAfter)
+        assertEquals(
+            mapOf("FONT_STYLE_NORMAL" to 0, "FONT_STYLE_ITALIC" to 1),
+            textLayout.fields.first { it.name == "fontStyle" }.enumValues,
+        )
+
+        // 7. javaClass overrides on the 17 ops whose schema name differs from remote-core
+        val customJavaClasses = schema.operations.filter { it.javaClassName != null }
+        assertEquals(17, customJavaClasses.size)
+        assertEquals(
+            "TouchDownModifierOperation",
+            schema.operationsByName.getValue("TouchModifier").resolvedJavaClassName,
+        )
+        assertEquals(
+            "ClickModifierOperation",
+            schema.operationsByName.getValue("ClickModifier").resolvedJavaClassName,
+        )
+        assertEquals(
+            "TouchUpModifierOperation",
+            schema.operationsByName.getValue("TouchUpModifier").resolvedJavaClassName,
+        )
+        assertEquals(
+            "RippleModifierOperation",
+            schema.operationsByName.getValue("RippleModifier").resolvedJavaClassName,
+        )
+        assertEquals(
+            "LoopOperation",
+            schema.operationsByName.getValue("Loop").resolvedJavaClassName,
+        )
+        assertEquals(
+            "DrawRect",
+            schema.operationsByName.getValue("DrawRect").resolvedJavaClassName,
+        )
+
+        // 8. reservedOpcodes cover experimental PropertyBundle (95, 96), 3D (110..118, 120),
+        // compressed stream marker (119), and extension range (251..255)
+        val reservedById = schema.reservedOpcodes.associateBy { it.id }
+        for (id in listOf(95, 96)) {
+            assertTrue("Missing experimental PropertyBundle opcode $id", id in reservedById)
+            assertEquals(listOf("androidx", "experimental"), reservedById.getValue(id).profiles)
+        }
+        for (id in listOf(110, 111, 112, 113, 114, 115, 116, 117, 118, 120)) {
+            assertTrue("Missing 3D opcode $id", id in reservedById)
+            assertEquals(
+                listOf("androidx", "widgets", "experimental"),
+                reservedById.getValue(id).profiles,
+            )
+        }
+        assertTrue("Missing compressed stream marker opcode 119", 119 in reservedById)
+        assertEquals("COMPRESSED_STREAM_MARKER", reservedById.getValue(119).opCodeName)
+        assertEquals(listOf("reserved"), reservedById.getValue(119).profiles)
+        for (id in 251..255) {
+            assertTrue("Missing reserved opcode $id", id in reservedById)
+            assertEquals(listOf("reserved"), reservedById.getValue(id).profiles)
+        }
+
+        // 8b. Every operation's schema-only opCodeName (without Operations.java reflection)
+        // matches Operations.java so validate() and generators never diverge by classpath
+        for (op in schema.operations) {
+            val expectedJavaOp = SchemaOperation.ID_TO_OPCODE_NAME[op.id]
+            if (expectedJavaOp != null) {
+                val schemaOnlyOpCodeName =
+                    op.opCodeName ?: SchemaOperation.toScreamingSnakeCase(op.name)
+                assertEquals(
+                    "Operation ${op.name} (${op.id}) must match Operations.$expectedJavaOp without reflection",
+                    expectedJavaOp,
+                    schemaOnlyOpCodeName,
+                )
+            }
+        }
+
+        // 9. JsonSchemaParser.validate rejects bad resolvedAfter, blank javaClass, duplicate
+        // opCodeName, & invalid reservedOpcodes
+        val badJson =
+            JSONObject(
+                """
+                {
+                  "schemaVersion": "1.0.0",
+                  "targetApiLevel": 8,
+                  "types": { "int": { "wire": "INT32", "description": "int" } },
+                  "categories": [{ "name": "Test", "description": "Test" }],
+                  "operations": [
+                    {
+                      "id": 1,
+                      "name": "Sample",
+                      "opCodeName": "SAMPLE_OP",
+                      "javaClass": "  ",
+                      "category": "Test",
+                      "description": "Sample",
+                      "fields": [
+                        { "name": "a", "type": "int", "resolvedAfter": null },
+                        { "name": "b", "type": "int", "resolvedAfter": "a" },
+                        { "name": "c", "type": "int", "resolvedAfter": 123 }
+                      ]
+                    },
+                    {
+                      "id": 2,
+                      "name": "SampleDupOpCode",
+                      "opCodeName": "SAMPLE_OP",
+                      "category": "Test",
+                      "description": "Dup opCodeName",
+                      "fields": []
+                    }
+                  ],
+                  "reservedOpcodes": [
+                    { "id": 1, "name": "Overlap", "opCodeName": "OVERLAP", "profiles": ["reserved"] },
+                    { "id": 3, "name": "MissingOpCode", "profiles": ["reserved"] },
+                    { "id": 4, "name": "DupOpCode", "opCodeName": "OVERLAP", "profiles": ["reserved"] },
+                    { "id": 5, "name": "CollideOpCode", "opCodeName": "SAMPLE_OP", "profiles": ["bogus_profile"] },
+                    { "id": 95.5, "name": "FractionalId", "opCodeName": "FRAC_ID", "profiles": ["reserved"] },
+                    { "id": 300, "name": "OutOfRangeId", "opCodeName": "OOR_ID", "profiles": ["reserved"] },
+                    { "id": 251, "name": "ValidAfterOor", "opCodeName": "VALID_AFTER_OOR", "profiles": ["reserved"] },
+                    { "name": "MissingId", "opCodeName": "MISSING_ID" }
+                  ]
+                }
+                """
+                    .trimIndent()
+            )
+        val errors = JsonSchemaParser.validate(badJson)
+        assertTrue(
+            "Expected blank javaClass error, got: $errors",
+            errors.any { it.contains("blank or non-string javaClass") },
+        )
+        assertTrue(
+            "Expected duplicate operation opCodeName error, got: $errors",
+            errors.any { it.contains("Duplicate operation opCodeName: SAMPLE_OP") },
+        )
+        assertTrue(
+            "Expected blank/non-string resolvedAfter error, got: $errors",
+            errors.any { it.contains("field a has blank or non-string resolvedAfter") },
+        )
+        assertTrue(
+            "Expected non-string resolvedAfter error, got: $errors",
+            errors.any { it.contains("field c has blank or non-string resolvedAfter") },
+        )
+        assertTrue(
+            "Expected resolvedAfter ordering error, got: $errors",
+            errors.any { it.contains("resolvedAfter 'a' must reference a later field") },
+        )
+        assertTrue(
+            "Expected reservedOpcodes overlap error, got: $errors",
+            errors.any { it.contains("overlaps declared operation ID") },
+        )
+        assertTrue(
+            "Expected missing opCodeName error, got: $errors",
+            errors.any { it.contains("must specify a non-blank opCodeName") },
+        )
+        assertTrue(
+            "Expected duplicate reserved opCodeName error, got: $errors",
+            errors.any { it.contains("Duplicate reserved opcode opCodeName: OVERLAP") },
+        )
+        assertTrue(
+            "Expected colliding reserved opCodeName error, got: $errors",
+            errors.any { it.contains("opCodeName 'SAMPLE_OP' collides with declared operation") },
+        )
+        assertTrue(
+            "Expected unknown profile error, got: $errors",
+            errors.any { it.contains("unknown profile 'bogus_profile'") },
+        )
+        assertTrue(
+            "Expected fractional id error, got: $errors",
+            errors.any { it.contains("index 4 must specify an integer id") },
+        )
+        assertTrue(
+            "Expected out-of-range id error, got: $errors",
+            errors.any { it.contains("OutOfRangeId has invalid ID 300") },
+        )
+        assertFalse(
+            "Out-of-range ID 300 must not cause spurious sort error on ValidAfterOor (251), got: $errors",
+            errors.any { it.contains("ValidAfterOor") && it.contains("not sorted") },
+        )
+        assertTrue(
+            "Expected missing id error, got: $errors",
+            errors.any { it.contains("index 7 must specify an integer id") },
+        )
+    }
+
+    @Test
+    fun testSwiftWriterTablesMaxLengthAndHygieneInvariants() {
+        val schema = loadSchema()
+        val swiftCode = SwiftGenerator(schema).generate()
+
+        // 1. Writer tables & constants
+        for (marker in
+            listOf(
+                "public enum ReservedOpCode: UInt8, CaseIterable, Equatable, Hashable, Sendable",
+                "case propertyBundleModifierOperation = 95",
+                "case defineMesh3D = 110",
+                "case compressedStreamMarker = 119",
+                "case extendedOpcode = 255",
+                "public enum ComponentVisibility",
+                "public static let gone: Int32 = 0",
+                "public static let visible: Int32 = 1",
+                "public static let invisible: Int32 = 2",
+                "public static let overrideGone: Int32 = 16",
+                "public static let overrideVisible: Int32 = 32",
+                "public static let overrideInvisible: Int32 = 64",
+                "public static let clearOverride: Int32 = 128",
+                "public static let tagMask: Int32 = 0xFFFF",
+                "public static let inlineValueShift: Int32 = 16",
+                "public static func packInline(tag: Int32, value: Int32) -> Int32",
+                "public enum FloatExpressionOperator",
+                "public static let idStoreR0: Int32 = 56",
+                "public static let storeR0: Float =",
+                "public static func token(fromId id: Int32) -> Float?",
+                "public static func isOperator(_ token: Float) -> Bool",
+                "public static func operatorId(_ token: Float) -> Int32",
+                "public enum IntegerExpressionOperator",
+                "public static let iAdd: Int32 = offset + 1",
+                "public static func isOperatorCode(_ value: Int32) -> Bool",
+                "public static let magicNumber: Int32 = 76283904",
+                "public static let dataTypeInt: Int32 = 0",
+                "public static let colorRef: Int32 = 2",
+                "public static let fontStyleItalic: Int32 = 1",
+            )) {
+            assertTrue("Swift output missing writer marker: $marker", swiftCode.contains(marker))
+        }
+
+        // 2. Symmetric maxLength checks, implicit prefix/bitfield bounds, and atomic write rollback
+        for (marker in
+            listOf(
+                "public mutating func truncate(to count: Int)",
+                "buffer.truncate(to: _startCount)",
+                "public mutating func writeUTF8(_ value: String, maxLength: Int? = nil) throws(WireError)",
+                "public mutating func writeBuffer(_ value: [UInt8], maxLength: Int? = nil) throws(WireError)",
+                "try buffer.writeUTF8(text, maxLength: 4000)",
+                "try buffer.writeBuffer(data, maxLength: 100000)",
+                "try buffer.writeBuffer(fontData, maxLength: 800000)",
+                "guard words.count <= 1024 else",
+                "guard expression.count <= 32 else",
+                "guard args.count <= 32767 else",
+                "guard kerningTable.count <= 65535 else",
+                "guard floatUniforms.count <= 255 else",
+                "guard animationSpec.count <= 65535 else",
+                "try buffer.writeUTF8(val, maxLength: Self.maxHeaderStringLength)",
+            )) {
+            assertTrue(
+                "Swift output missing maxLength write guard: $marker",
+                swiftCode.contains(marker),
+            )
+        }
+
+        // 3. Static Swift hygiene invariants across the full generated file
+        assertFalse("Swift must not import Foundation", swiftCode.contains("import Foundation"))
+        assertFalse("Swift must not reference NSError", swiftCode.contains("NSError"))
+        assertFalse(
+            "Swift must not emit SCREAMING_SNAKE static let constants",
+            Regex("""public static let [A-Z][A-Z0-9_]+\s*:""").containsMatchIn(swiftCode),
+        )
+        assertFalse(
+            "Swift must not call throwing writeUTF8 without try",
+            Regex("""(?<!try )(?<!func )buffer\.writeUTF8\(""").containsMatchIn(swiftCode),
+        )
+        assertFalse(
+            "Swift must not call throwing writeBuffer without try",
+            Regex("""(?<!try )(?<!func )buffer\.writeBuffer\(""").containsMatchIn(swiftCode),
+        )
+        assertFalse(
+            "Swift must not emit unqualified min() or max()",
+            Regex("""(?<!Swift\.)\b(?:min|max)\(""").containsMatchIn(swiftCode),
+        )
+        assertEquals(
+            "Swift braces must be balanced",
+            swiftCode.count { it == '{' },
+            swiftCode.count { it == '}' },
+        )
+        assertTrue(
+            "Swift IntegerExpressionOperator.isOperatorCode must use overflow-safe subtraction",
+            swiftCode.contains("value.subtractingReportingOverflow(offset)"),
+        )
+
+        // 4. Optional swiftc compile + runtime round-trip check when Swift 6 toolchain is present
+        val swiftc =
+            (listOfNotNull(findExecutableOnPath("swiftc")) +
+                    listOf("/usr/bin/swiftc", "/usr/local/bin/swiftc", "/opt/homebrew/bin/swiftc")
+                        .map { File(it) })
+                .firstOrNull { it.exists() && it.canExecute() && canCompileSwift6(it) }
+        if (swiftc != null) {
+            val tmpDir = Files.createTempDirectory("rc_swift_test").toFile()
+            try {
+                File(tmpDir, "RemoteComposeWire.swift").writeText(swiftCode)
+                File(tmpDir, "main.swift")
+                    .writeText(
+                        """
+                        // Verify TouchExpression/PathExpression/ParticlesCompare compile,
+                        // modern header round-trip, NaN ID equality & decoding, atomic rollback,
+                        // and write maxLength/prefix-bound enforcement.
+                        assert(IdEncoding.isNanBits(0x7F80_0005))
+                        assert(IdEncoding.idFromNanBits(0x7F80_0005) == 5)
+                        assert(!IdEncoding.isNanBits(0x7FC0_0000))
+                        assert(IdEncoding.idFromNanBits(0x7FC0_0000) == IdEncoding.noId)
+                        assert(FloatExpressionOperator.isOperator(FloatExpressionOperator.storeR0))
+                        assert(FloatExpressionOperator.operatorId(FloatExpressionOperator.storeR0) == FloatExpressionOperator.idStoreR0)
+                        assert(IntegerExpressionOperator.isOperatorCode(IntegerExpressionOperator.iAdd))
+                        assert(!IntegerExpressionOperator.isOperatorCode(Int32.min))
+                        assert(PaintCommandTags.packInline(tag: PaintCommandTags.style, value: PaintConstants.styleStroke) == (PaintCommandTags.style | (PaintConstants.styleStroke << PaintCommandTags.inlineValueShift)))
+
+                        let nanVar = Float(bitPattern: UInt32(bitPattern: IdEncoding.asNanBits(42)))
+                        let doc = WireDocument(
+                            majorVersion: 1,
+                            minorVersion: 1,
+                            patchVersion: 0,
+                            width: 400,
+                            height: 300,
+                            isModernHeader: true,
+                            properties: [
+                                WireHeaderProperty(key: HeaderProperty.docWidth, value: .int(400)),
+                                WireHeaderProperty(key: HeaderProperty.docHeight, value: .int(300)),
+                                WireHeaderProperty(key: HeaderProperty.docDensityAtGeneration, value: .float(2.0)),
+                                WireHeaderProperty(key: HeaderProperty.docContentDescription, value: .string("test")),
+                            ],
+                            operations: [
+                                .textData(TextData(textId: 42, text: "hello")),
+                                .borderModifierOperation(BorderModifierOperation(shapeType: BorderModifierOperation.roundedRectangle)),
+                                .floatExpression(FloatExpression(id: 7, expression: [nanVar, 2.0, FloatExpressionOperator.add])),
+                            ]
+                        )
+                        let bytes = try doc.save()
+                        let decoded = try WireDocument.load(from: bytes)
+                        assert(decoded == doc)
+                        assert(try decoded.save() == bytes)
+
+                        // Verify PathEffect/PathCommand bit-exact equality & hashing with NaN IDs
+                        let pe1 = PathEffect.dash(phase: nanVar, intervals: [4.0, nanVar])
+                        let pe2 = PathEffect.dash(phase: nanVar, intervals: [4.0, nanVar])
+                        assert(pe1 == pe2)
+                        assert(Set([pe1]).contains(pe2))
+                        let pc1 = PathCommand.moveTo(x: nanVar, y: 1.0)
+                        let pc2 = PathCommand.moveTo(x: nanVar, y: 1.0)
+                        assert(pc1 == pc2)
+                        assert(Set([pc1]).contains(pc2))
+
+                        // Verify unknown header payload round-trip & dimension/capabilities reconciliation
+                        var mutDoc = decoded
+                        mutDoc.width = 800
+                        mutDoc.capabilities = 0x1_0000_0001
+                        mutDoc.properties.append(
+                            WireHeaderProperty(key: 60, value: .unknown(dataType: 7, payload: [1, 2, 3, 4]))
+                        )
+                        let mutBytes = try mutDoc.save()
+                        let mutDecoded = try WireDocument.load(from: mutBytes)
+                        assert(mutDecoded.width == 800)
+                        assert(mutDecoded.height == 300)
+                        assert(mutDecoded.capabilities == 0x1_0000_0001)
+                        assert(mutDecoded.properties.contains(WireHeaderProperty(key: 60, value: .unknown(dataType: 7, payload: [1, 2, 3, 4]))))
+                        assert(mutDecoded.operations == doc.operations)
+                        let mixedInitDoc = WireDocument(
+                            width: 640,
+                            height: 480,
+                            properties: [WireHeaderProperty(key: HeaderProperty.docDensityAtGeneration, value: .float(3.0))]
+                        )
+                        let mixedDecoded = try WireDocument.load(from: try mixedInitDoc.save())
+                        assert(mixedDecoded.width == 640)
+                        assert(mixedDecoded.height == 480)
+
+                        // Verify atomic WireBuffer rollback on throwing write
+                        var partialBuf = WireBuffer(data: [0xDE, 0xAD])
+                        var threwOnTooLong = false
+                        do {
+                            let bigOp = TextData(textId: 1, text: String(repeating: "a", count: 4001))
+                            try bigOp.write(to: &partialBuf)
+                        } catch WireError.lengthOutOfRange {
+                            threwOnTooLong = true
+                        }
+                        assert(threwOnTooLong)
+                        assert(partialBuf.data == [0xDE, 0xAD])
+                        print("Swift codecs OK")
+                        """
+                            .trimIndent()
+                    )
+                val outBin = File(tmpDir, "rc_swift_test")
+                runCheckedProcess(
+                    "Swift compile",
+                    listOf(
+                        swiftc.absolutePath,
+                        "-swift-version",
+                        "6",
+                        File(tmpDir, "RemoteComposeWire.swift").absolutePath,
+                        File(tmpDir, "main.swift").absolutePath,
+                        "-o",
+                        outBin.absolutePath,
+                    ),
+                    tmpDir,
+                )
+                runCheckedProcess("Swift run", listOf(outBin.absolutePath), tmpDir)
+            } finally {
+                tmpDir.deleteRecursively()
+            }
+        }
+    }
+
+    private fun canCompileSwift6(swiftc: File): Boolean {
+        val tmpDir = Files.createTempDirectory("rc_swift6_probe").toFile()
+        return try {
+            val probe = File(tmpDir, "probe.swift")
+            probe.writeText("enum E: Error, Sendable { case a }\nfunc f() throws(E) {}\n")
+            val proc =
+                ProcessBuilder(
+                        swiftc.absolutePath,
+                        "-swift-version",
+                        "6",
+                        "-typecheck",
+                        probe.absolutePath,
+                    )
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start()
+            val finished = proc.waitFor(15, TimeUnit.SECONDS)
+            if (!finished) {
+                proc.destroyForcibly()
+                false
+            } else {
+                proc.exitValue() == 0
+            }
+        } catch (_: Exception) {
+            false
+        } finally {
+            tmpDir.deleteRecursively()
         }
     }
 
